@@ -1,0 +1,99 @@
+
+[
+  {
+    "document_id": "POL-VPN-001",
+    "title": "Corporate VPN Access Policy",
+    "document_type": "policy",
+    "service_id": "SVC-VPN",
+    "classification": "employee_public",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "network_operations",
+    "content_file": "knowledge/policies/POL-VPN-001.md"
+  },
+  {
+    "document_id": "POL-SEC-002",
+    "title": "Password and MFA Security Policy",
+    "document_type": "policy",
+    "service_id": "SVC-IDENTITY",
+    "classification": "employee_public",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "identity_operations",
+    "content_file": "knowledge/policies/POL-SEC-002.md"
+  },
+  {
+    "document_id": "POL-END-003",
+    "title": "Endpoint Security Policy",
+    "document_type": "policy",
+    "service_id": "SVC-ENDPOINT",
+    "classification": "employee_public",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "endpoint_support",
+    "content_file": "knowledge/policies/POL-END-003.md"
+  },
+  {
+    "document_id": "POL-DATA-004",
+    "title": "Data Classification and Handling Policy",
+    "document_type": "policy",
+    "service_id": "SVC-FILES",
+    "classification": "employee_public",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "security_operations",
+    "content_file": "knowledge/policies/POL-DATA-004.md"
+  },
+  {
+    "document_id": "POL-INC-005",
+    "title": "Incident Response and Escalation Policy",
+    "document_type": "policy",
+    "service_id": "SVC-MONITOR",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "security_operations",
+    "content_file": "knowledge/policies/POL-INC-005.md"
+  },
+  {
+    "document_id": "POL-CHG-006",
+    "title": "IT Change Management Policy",
+    "document_type": "policy",
+    "service_id": "SVC-DEVOPS",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "platform_engineering",
+    "content_file": "knowledge/policies/POL-CHG-006.md"
+  },
+  {
+    "document_id": "POL-BKP-007",
+    "title": "Backup and Recovery Policy",
+    "document_type": "policy",
+    "service_id": "SVC-FILES",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "infrastructure_operations",
+    "content_file": "knowledge/policies/POL-BKP-007.md"
+  },
+  {
+    "document_id": "POL-USE-008",
+    "title": "Acceptable Technology Use Policy",
+    "document_type": "policy",
+    "service_id": "SVC-ENDPOINT",
+    "classification": "employee_public",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "security_operations",
+    "content_file": "knowledge/policies/POL-USE-008.md"
+  }
+]
