@@ -1,4 +1,3 @@
-
 [
   {
     "document_id": "POL-VPN-001",
@@ -95,5 +94,149 @@
     "updated_at": "2026-10-01",
     "owner_team": "security_operations",
     "content_file": "knowledge/policies/POL-USE-008.md"
+  },
+  {
+    "document_id": "RB-VPN-003",
+    "title": "VPN Certificate Troubleshooting",
+    "document_type": "runbook",
+    "service_id": "SVC-VPN",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "network_operations",
+    "content_file": "knowledge/runbooks/RB-VPN-003.md"
+  },
+  {
+    "document_id": "RB-VPN-001",
+    "title": "VPN Connectivity Troubleshooting",
+    "document_type": "runbook",
+    "service_id": "SVC-VPN",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "network_operations",
+    "content_file": "knowledge/runbooks/RB-VPN-001.md"
+  },
+  {
+    "document_id": "RB-VPN-002",
+    "title": "VPN Authentication Failure",
+    "document_type": "runbook",
+    "service_id": "SVC-VPN",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "network_operations",
+    "content_file": "knowledge/runbooks/RB-VPN-002.md"
+  },
+  {
+    "document_id": "RB-ID-004",
+    "title": "SSO Login Failure",
+    "document_type": "runbook",
+    "service_id": "SVC-IDENTITY",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "identity_operations",
+    "content_file": "knowledge/runbooks/RB-ID-004.md"
+  },
+  {
+    "document_id": "RB-ID-005",
+    "title": "MFA Device Recovery",
+    "document_type": "runbook",
+    "service_id": "SVC-IDENTITY",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "identity_operations",
+    "content_file": "knowledge/runbooks/RB-ID-005.md"
+  },
+  {
+    "document_id": "RB-EMAIL-006",
+    "title": "Email Delivery Failure",
+    "document_type": "runbook",
+    "service_id": "SVC-EMAIL",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "messaging_operations",
+    "content_file": "knowledge/runbooks/RB-EMAIL-006.md"
+  },
+  {
+    "document_id": "RB-PAY-007",
+    "title": "Payroll Application Outage",
+    "document_type": "runbook",
+    "service_id": "SVC-PAYROLL",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "business_applications",
+    "content_file": "knowledge/runbooks/RB-PAY-007.md"
+  },
+  {
+    "document_id": "RB-WIFI-008",
+    "title": "Office Wi-Fi Diagnostics",
+    "document_type": "runbook",
+    "service_id": "SVC-WIFI",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "network_operations",
+    "content_file": "knowledge/runbooks/RB-WIFI-008.md"
+  },
+  {
+    "document_id": "RB-END-009",
+    "title": "Endpoint Malware Investigation",
+    "document_type": "runbook",
+    "service_id": "SVC-ENDPOINT",
+    "classification": "admin_restricted",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "security_operations",
+    "content_file": "knowledge/runbooks/RB-END-009.md"
+  },
+  {
+    "document_id": "RB-FILE-010",
+    "title": "File Sharing Access Failure",
+    "document_type": "runbook",
+    "service_id": "SVC-FILES",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "infrastructure_operations",
+    "content_file": "knowledge/runbooks/RB-FILE-010.md"
+  },
+  {
+    "document_id": "RB-CICD-011",
+    "title": "CI/CD Pipeline Failure",
+    "document_type": "runbook",
+    "service_id": "SVC-DEVOPS",
+    "classification": "it_internal",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "platform_engineering",
+    "content_file": "knowledge/runbooks/RB-CICD-011.md"
+  },
+  {
+    "document_id": "RB-BKP-012",
+    "title": "Backup Job Failure and Recovery",
+    "document_type": "runbook",
+    "service_id": "SVC-FILES",
+    "classification": "admin_restricted",
+    "version": "1.0",
+    "status": "approved",
+    "updated_at": "2026-10-01",
+    "owner_team": "infrastructure_operations",
+    "content_file": "knowledge/runbooks/RB-BKP-012.md"
   }
 ]
