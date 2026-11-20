@@ -1,0 +1,16 @@
+asset_id,asset_name,asset_type,service_id,assigned_to,location,status,classification
+AST-001,VPN Gateway Primary,vpn_gateway,SVC-VPN,,Primary Data Center,active,admin_restricted
+AST-002,VPN Gateway Secondary,vpn_gateway,SVC-VPN,,Secondary Data Center,active,admin_restricted
+AST-003,Identity Server 01,server,SVC-IDENTITY,,Primary Data Center,active,admin_restricted
+AST-004,Email Transport Server,server,SVC-EMAIL,,Primary Data Center,active,it_internal
+AST-005,Payroll Application Server,server,SVC-PAYROLL,,Primary Data Center,active,admin_restricted
+AST-006,HR Application Server,server,SVC-HR,,Primary Data Center,active,it_internal
+AST-007,Employee Laptop 01,laptop,SVC-ENDPOINT,USR-001,Finance Office,active,it_internal
+AST-008,Employee Laptop 02,laptop,SVC-ENDPOINT,USR-002,Sales Office,active,it_internal
+AST-009,Employee Laptop 03,laptop,SVC-ENDPOINT,USR-004,Engineering Office,active,it_internal
+AST-010,Office Wireless AP 01,wireless_access_point,SVC-WIFI,,Main Office Floor 1,active,it_internal
+AST-011,Office Wireless AP 02,wireless_access_point,SVC-WIFI,,Main Office Floor 2,active,it_internal
+AST-012,File Storage Server,storage_system,SVC-FILES,,Primary Data Center,active,admin_restricted
+AST-013,CI Runner 01,server,SVC-DEVOPS,,Engineering Infrastructure,active,it_internal
+AST-014,Monitoring Server,server,SVC-MONITOR,,Primary Data Center,active,it_internal
+AST-015,Backup Storage System,storage_system,SVC-FILES,,Secondary Data Center,active,admin_restricted

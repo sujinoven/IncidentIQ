@@ -1,0 +1,86 @@
+[
+  {
+    "user_id": "USR-001",
+    "display_name": "Asha Raman",
+    "role": "employee",
+    "department": "Finance",
+    "active": true
+  },
+  {
+    "user_id": "USR-002",
+    "display_name": "Daniel Reed",
+    "role": "employee",
+    "department": "Sales",
+    "active": true
+  },
+  {
+    "user_id": "USR-003",
+    "display_name": "Meera Shah",
+    "role": "employee",
+    "department": "Human Resources",
+    "active": true
+  },
+  {
+    "user_id": "USR-004",
+    "display_name": "Noah Chen",
+    "role": "employee",
+    "department": "Engineering",
+    "active": true
+  },
+  {
+    "user_id": "USR-005",
+    "display_name": "Priya Nair",
+    "role": "employee",
+    "department": "Operations",
+    "active": true
+  },
+  {
+    "user_id": "USR-006",
+    "display_name": "Olivia Brooks",
+    "role": "employee",
+    "department": "Finance",
+    "active": true
+  },
+  {
+    "user_id": "USR-007",
+    "display_name": "Arjun Patel",
+    "role": "employee",
+    "department": "Engineering",
+    "active": true
+  },
+  {
+    "user_id": "USR-008",
+    "display_name": "Emma Wilson",
+    "role": "employee",
+    "department": "Sales",
+    "active": true
+  },
+  {
+    "user_id": "USR-009",
+    "display_name": "Sofia Martin",
+    "role": "it_support",
+    "department": "IT Support",
+    "active": true
+  },
+  {
+    "user_id": "USR-010",
+    "display_name": "Liam Walker",
+    "role": "it_support",
+    "department": "IT Support",
+    "active": true
+  },
+  {
+    "user_id": "USR-011",
+    "display_name": "Ethan Clark",
+    "role": "it_admin",
+    "department": "Infrastructure",
+    "active": true
+  },
+  {
+    "user_id": "USR-012",
+    "display_name": "Maya Iyer",
+    "role": "it_admin",
+    "department": "Security Operations",
+    "active": true
+  }
+]
