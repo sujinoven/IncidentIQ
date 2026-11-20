@@ -3,60 +3,90 @@
     "service_id": "SVC-VPN",
     "service_name": "Corporate VPN",
     "owner_team": "Network Operations",
-    "status": "operational"
+    "status": "operational",
+    "description": "Secure remote access for employees",
+    "checked_at": "2026-11-20T11:11:22.953648+00:00",
+    "active_alerts": []
   },
   {
     "service_id": "SVC-IDENTITY",
     "service_name": "Identity & SSO",
     "owner_team": "Identity Operations",
-    "status": "operational"
+    "status": "operational",
+    "description": "Corporate identity and single sign-on",
+    "checked_at": "2026-11-20T11:11:22.953648+00:00",
+    "active_alerts": []
   },
   {
     "service_id": "SVC-EMAIL",
     "service_name": "Corporate Email",
     "owner_team": "Messaging Operations",
-    "status": "operational"
+    "status": "operational",
+    "description": "Corporate email and messaging",
+    "checked_at": "2026-11-20T11:11:22.953648+00:00",
+    "active_alerts": []
   },
   {
     "service_id": "SVC-PAYROLL",
     "service_name": "Payroll Application",
     "owner_team": "Business Applications",
-    "status": "operational"
+    "status": "operational",
+    "description": "Employee payroll application",
+    "checked_at": "2026-11-20T11:11:22.953648+00:00",
+    "active_alerts": []
   },
   {
     "service_id": "SVC-HR",
     "service_name": "HR Portal",
     "owner_team": "Business Applications",
-    "status": "operational"
+    "status": "operational",
+    "description": "Human resources portal",
+    "checked_at": "2026-11-20T11:11:22.953648+00:00",
+    "active_alerts": []
   },
   {
     "service_id": "SVC-ENDPOINT",
     "service_name": "Employee Devices",
     "owner_team": "Endpoint Support",
-    "status": "operational"
+    "status": "operational",
+    "description": "Managed employee devices",
+    "checked_at": "2026-11-20T11:11:22.953648+00:00",
+    "active_alerts": []
   },
   {
     "service_id": "SVC-WIFI",
     "service_name": "Office Wi-Fi",
     "owner_team": "Network Operations",
-    "status": "operational"
+    "status": "operational",
+    "description": "Office wireless connectivity",
+    "checked_at": "2026-11-20T11:11:22.953648+00:00",
+    "active_alerts": []
   },
   {
     "service_id": "SVC-FILES",
     "service_name": "File Sharing",
     "owner_team": "Infrastructure Operations",
-    "status": "operational"
+    "status": "operational",
+    "description": "Enterprise file sharing and storage",
+    "checked_at": "2026-11-20T11:11:22.953648+00:00",
+    "active_alerts": []
   },
   {
     "service_id": "SVC-DEVOPS",
     "service_name": "CI/CD Platform",
     "owner_team": "Platform Engineering",
-    "status": "operational"
+    "status": "operational",
+    "description": "Continuous integration and deployment",
+    "checked_at": "2026-11-20T11:11:22.953648+00:00",
+    "active_alerts": []
   },
   {
     "service_id": "SVC-MONITOR",
     "service_name": "Monitoring Platform",
     "owner_team": "Site Reliability Engineering",
-    "status": "operational"
+    "status": "operational",
+    "description": "Infrastructure and service monitoring",
+    "checked_at": "2026-11-20T11:11:22.953648+00:00",
+    "active_alerts": []
   }
 ]

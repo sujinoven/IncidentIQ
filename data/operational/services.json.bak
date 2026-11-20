@@ -1,0 +1,62 @@
+[
+  {
+    "service_id": "SVC-VPN",
+    "service_name": "Corporate VPN",
+    "owner_team": "Network Operations",
+    "status": "operational"
+  },
+  {
+    "service_id": "SVC-IDENTITY",
+    "service_name": "Identity & SSO",
+    "owner_team": "Identity Operations",
+    "status": "operational"
+  },
+  {
+    "service_id": "SVC-EMAIL",
+    "service_name": "Corporate Email",
+    "owner_team": "Messaging Operations",
+    "status": "operational"
+  },
+  {
+    "service_id": "SVC-PAYROLL",
+    "service_name": "Payroll Application",
+    "owner_team": "Business Applications",
+    "status": "operational"
+  },
+  {
+    "service_id": "SVC-HR",
+    "service_name": "HR Portal",
+    "owner_team": "Business Applications",
+    "status": "operational"
+  },
+  {
+    "service_id": "SVC-ENDPOINT",
+    "service_name": "Employee Devices",
+    "owner_team": "Endpoint Support",
+    "status": "operational"
+  },
+  {
+    "service_id": "SVC-WIFI",
+    "service_name": "Office Wi-Fi",
+    "owner_team": "Network Operations",
+    "status": "operational"
+  },
+  {
+    "service_id": "SVC-FILES",
+    "service_name": "File Sharing",
+    "owner_team": "Infrastructure Operations",
+    "status": "operational"
+  },
+  {
+    "service_id": "SVC-DEVOPS",
+    "service_name": "CI/CD Platform",
+    "owner_team": "Platform Engineering",
+    "status": "operational"
+  },
+  {
+    "service_id": "SVC-MONITOR",
+    "service_name": "Monitoring Platform",
+    "owner_team": "Site Reliability Engineering",
+    "status": "operational"
+  }
+]
