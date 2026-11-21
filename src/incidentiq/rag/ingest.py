@@ -70,10 +70,7 @@ def load_knowledge_documents() -> list[Document]:
 def chunk_documents(
     documents: list[Document],
 ) -> list[Document]:
-    """
-    Split documents while preserving their metadata.
-    """
-    # Use a recursive character text splitter to create chunks of the documents.
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
         chunk_overlap=120,
@@ -87,15 +84,22 @@ def chunk_documents(
         ],
     )
 
-    chunks = splitter.split_documents(documents)
+    chunks = []
 
-    for index, chunk in enumerate(chunks):
-        #Chunk metadata is updated to include a unique chunk ID based on the original document ID and the chunk index.
-        chunk.metadata["chunk_id"] = (
-            f"{chunk.metadata['document_id']}-CHUNK-{index:04d}"
-        )
+    for document in documents:
+        document_chunks = splitter.split_documents([document])
+
+        for index, chunk in enumerate(document_chunks):
+            document_id = document.metadata["document_id"]
+
+            chunk.metadata["chunk_id"] = (
+                f"{document_id}-CHUNK-{index:04d}"
+            )
+
+            chunks.append(chunk)
 
     return chunks
+
 
 #Add a security consistency check.We should verify that chunking never loses the classification metadata.
 def validate_chunks(
