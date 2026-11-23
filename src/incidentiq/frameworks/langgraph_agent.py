@@ -1,4 +1,6 @@
-
+#LangGraph decides what needs to happen.
+#The MCP client communicates the request.
+# he MCP server executes authorized tools. The LLM analyzes the returned information.
 """
 IncidentIQ - LangGraph Agent
 

@@ -41,18 +41,19 @@ async def _call_tool_async(
 
     # Launch the server using the same Python interpreter
     # managed by uv.
+    #A process is a running instance of a program.A subprocess is a separate process launched by another program.
     server_parameters = StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "incidentiq.mcp.server"],
+        command=sys.executable,  #It identifies the Python interpreter running the client.
+        args=["-m", "incidentiq.mcp.server"], #The -m option tells Python to execute a module by its importable module name.
         env=environment,
     )
-
+    #This starts the server subprocess and establishes the input/output streams.
     async with stdio_client(server_parameters) as (
         read,
         write,
     ):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
+        async with ClientSession(read, write) as session: #ClientSessionA session manages the MCP protocol interaction.It allows the client to initialize communication and invoke tools.
+            await session.initialize() #This performs the MCP initialization handshake.During initialization, the client and server establish protocol compatibility and exchange capability information.After initialization, the client can call registered tools.
 
             # Call the MCP tool by its registered name.
             result = await session.call_tool(
