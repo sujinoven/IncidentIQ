@@ -51,7 +51,7 @@ from incidentiq.core.models import (
     SourceReference,
 )
 from incidentiq.core.security import AccessDeniedError
-from incidentiq.mcp.server import get_incident
+from incidentiq.mcp.client import call_tool
 from incidentiq.rag.retriever import retrieve_knowledge
 from incidentiq.rag.service import (
     GroundedAnswer,
@@ -214,39 +214,32 @@ def extract_incident_id(state: IncidentIQState) -> dict:
 # 5. LOOK UP THE INCIDENT
 # ---------------------------------------------------------
 
+
 def lookup_incident(state: IncidentIQState) -> dict:
     """
-    Load the incident record from the operational dataset.
+    Retrieve an incident through the real MCP protocol.
 
     Why:
-        The LLM should analyze a real incident record rather
-        than inventing incident details.
+        LangGraph should use the same operational tools
+        that CrewAI and Agno will use later.
 
     Security:
-        get_incident() enforces role-based access control.
-
-    Privacy:
-        Missing and unauthorized incidents receive the
-        same user-facing message.
+        The MCP server enforces authorization before
+        returning incident details.
     """
 
     incident_id = state.get("incident_id")
 
-    # Nothing to retrieve if extraction failed.
     if not incident_id:
         return {}
 
-    try:
-        incident = get_incident(
-            incident_id=incident_id,
-            user=state["request"].user,
-        )
+    result = call_tool(
+        tool_name="get_incident",
+        arguments={"incident_id": incident_id},
+        user=state["request"].user,
+    )
 
-    except AccessDeniedError:
-        # Do not reveal whether the incident exists.
-        incident = None
-
-    if incident is None:
+    if not result.get("found"):
         return {
             "incident": None,
             "response": AgentResponse(
@@ -261,7 +254,10 @@ def lookup_incident(state: IncidentIQState) -> dict:
             ),
         }
 
-    return {"incident": incident}
+    return {
+        "incident": result["incident"],
+    }
+
 
 
 # ---------------------------------------------------------
