@@ -60,6 +60,8 @@ class AgentResponse(BaseModel):
 
     framework: FrameworkName
 
+    pending_confirmation_token: str | None = None
+
     sources: list[SourceReference] = Field(
         default_factory=list
     )

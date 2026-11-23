@@ -32,6 +32,10 @@ from incidentiq.core.security import (
     require_access,
 )
 import csv
+import secrets
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 
 # Register the MCP server.
@@ -268,11 +272,11 @@ def get_service_status_tool(service_id: str) -> dict:
 from pathlib import Path
 
 
+
 def load_ticket_records() -> list[dict]:
     """
-    Load tickets from the existing operational JSONL file.
-
-    This reuses our synthetic ticket dataset.
+    Load historical tickets from JSONL and newly
+    created tickets from SQLite.
     """
     path = (
         settings.incidentiq_data_dir
@@ -280,25 +284,26 @@ def load_ticket_records() -> list[dict]:
         / "tickets.jsonl"
     )
 
-    records = []
+    tickets = []
 
+    # Load historical synthetic tickets.
     with path.open("r", encoding="utf-8") as file:
-        for line_number, line in enumerate(file, 1):
+        for line in file:
             line = line.strip()
+            if line:
+                tickets.append(json.loads(line.rstrip(",")))
 
-            if not line:
-                continue
+    # Load newly created tickets.
+    with get_ticket_database() as db:
+        rows = db.execute(
+            "SELECT ticket_json FROM created_tickets"
+        ).fetchall()
 
-            try:
-                record = json.loads(line.rstrip(","))
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"Invalid ticket JSONL at line {line_number}"
-                ) from exc
+    for row in rows:
+        tickets.append(json.loads(row["ticket_json"]))
 
-            records.append(record)
+    return tickets
 
-    return records
 
 
 def require_it_staff(user: UserContext) -> None:
@@ -364,10 +369,13 @@ def search_tickets_tool(
     matches = []
 
     for ticket in load_ticket_records():
-        require_access(
-            user,
-            ticket.get("classification", "it_internal"),
-        )
+        try:
+            require_access(
+                user,
+                ticket.get("classification", "it_internal"),
+            )
+        except AccessDeniedError:
+            continue
 
         searchable = " ".join(
             str(ticket.get(field, ""))
@@ -402,7 +410,7 @@ def get_ticket_tool(ticket_id: str) -> dict:
     user = get_authenticated_user()
     require_it_staff(user)
 
-    if not re.fullmatch(r"TKT-\d{4}", ticket_id):
+    if not re.fullmatch(r"TKT-(?:\d{4}|[A-F0-9]{12})",ticket_id,):
         raise ValueError("Invalid ticket ID format.")
 
     for ticket in load_ticket_records():
@@ -524,6 +532,263 @@ def search_assets_tool(
         "count": len(matches),
         "assets": matches,
     }
+
+
+# ---------------------------------------------------------
+# SAFE TICKET CREATION
+# ---------------------------------------------------------
+
+from pydantic import BaseModel, Field
+
+
+class NewTicket(BaseModel):
+    """
+    Validate the information needed to create a ticket.
+
+    The requester ID is deliberately excluded.
+    It comes from the trusted application context.
+    """
+
+    service_id: str = Field(
+        pattern=r"^SVC-[A-Z0-9-]+$"
+    )
+    title: str = Field(min_length=5, max_length=150)
+    description: str = Field(min_length=10, max_length=2000)
+    priority: str = Field(pattern=r"^P[1-4]$")
+
+
+def get_ticket_database() -> sqlite3.Connection:
+    """
+    Open SQLite storage for pending and newly created tickets.
+
+    SQLite transactions let us consume a confirmation token
+    and create its ticket as one atomic operation.
+    """
+    path = settings.incidentiq_sqlite_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(
+        str(path),
+        timeout=10,
+    )
+    connection.row_factory = sqlite3.Row
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS pending_tickets (
+            token TEXT PRIMARY KEY,
+            requester_id TEXT NOT NULL,
+            ticket_json TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_ticket_id TEXT
+        )
+    """)
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS created_tickets (
+            ticket_id TEXT PRIMARY KEY,
+            requester_id TEXT NOT NULL,
+            ticket_json TEXT NOT NULL
+        )
+    """)
+
+    connection.commit()
+    return connection
+
+
+def service_exists(service_id: str) -> bool:
+    """
+    Check that the requested service exists in our dataset.
+    """
+    path = (
+        settings.incidentiq_data_dir
+        / "operational"
+        / "services.json"
+    )
+
+    services = json.loads(path.read_text(encoding="utf-8"))
+
+    return any(
+        service["service_id"] == service_id
+        for service in services
+    )
+
+
+@mcp.tool(name="prepare_ticket")
+def prepare_ticket_tool(
+    service_id: str,
+    title: str,
+    description: str,
+    priority: str = "P3",
+) -> dict:
+    """
+    Validate and prepare a ticket without creating it.
+
+    Returns a confirmation token that the trusted UI must
+    retain until the user explicitly approves the request.
+    """
+    user = get_authenticated_user()
+
+    ticket = NewTicket(
+        service_id=service_id,
+        title=title,
+        description=description,
+        priority=priority,
+    )
+
+    if not service_exists(ticket.service_id):
+        raise ValueError("Unknown service ID.")
+
+    token = secrets.token_urlsafe(32)
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(minutes=10)
+    ).isoformat()
+
+    preview = {
+        **ticket.model_dump(),
+        "requester_id": user.user_id,
+    }
+
+    with get_ticket_database() as db:
+        db.execute(
+            """
+            INSERT INTO pending_tickets
+            (token, requester_id, ticket_json, expires_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                token,
+                user.user_id,
+                json.dumps(preview),
+                expires_at,
+            ),
+        )
+
+    return {
+        "status": "awaiting_confirmation",
+        "preview": preview,
+        "confirmation_token": token,
+        "expires_at": expires_at,
+        "message": "Ticket prepared but not created.",
+    }
+
+
+@mcp.tool(name="create_ticket")
+def create_ticket_tool(
+    confirmation_token: str,
+) -> dict:
+    """
+    Create a previously prepared ticket.
+
+    IMPORTANT:
+        This function must be invoked only by a trusted
+        application handler after an explicit user
+        confirmation event.
+
+        The LLM must never be given unrestricted access
+        to this tool.
+    """
+    user = get_authenticated_user()
+
+    db = get_ticket_database()
+
+    try:
+        # Lock the database for this transaction.
+        db.execute("BEGIN IMMEDIATE")
+
+        pending = db.execute(
+            """
+            SELECT *
+            FROM pending_tickets
+            WHERE token = ?
+            """,
+            (confirmation_token,),
+        ).fetchone()
+
+        if pending is None:
+            raise ValueError("Invalid confirmation token.")
+
+        # A token is bound to its original requester.
+        if pending["requester_id"] != user.user_id:
+            raise AccessDeniedError(
+                "Confirmation belongs to another user."
+            )
+
+        # A previously completed request is idempotent.
+        if pending["created_ticket_id"]:
+            ticket_id = pending["created_ticket_id"]
+            db.commit()
+            return {
+                "status": "created",
+                "ticket_id": ticket_id,
+                "already_created": True,
+            }
+
+        expires_at = datetime.fromisoformat(
+            pending["expires_at"]
+        )
+
+        if datetime.now(timezone.utc) > expires_at:
+            raise ValueError("Confirmation token expired.")
+
+        ticket = json.loads(pending["ticket_json"])
+
+        # Revalidate the prepared fields.
+        validated = NewTicket.model_validate(ticket)
+
+        if not service_exists(validated.service_id):
+            raise ValueError("Service no longer exists.")
+
+        # UUID-based IDs avoid collisions across processes.
+        ticket_id = f"TKT-{uuid4().hex[:12].upper()}"
+
+        record = {
+            "ticket_id": ticket_id,
+            **validated.model_dump(),
+            "requester_id": user.user_id,
+            "status": "open",
+            "classification": "it_internal",
+            "created_at": datetime.now(
+                timezone.utc
+            ).isoformat(),
+        }
+
+        db.execute(
+            """
+            INSERT INTO created_tickets
+            (ticket_id, requester_id, ticket_json)
+            VALUES (?, ?, ?)
+            """,
+            (
+                ticket_id,
+                user.user_id,
+                json.dumps(record),
+            ),
+        )
+
+        db.execute(
+            """
+            UPDATE pending_tickets
+            SET created_ticket_id = ?
+            WHERE token = ?
+            """,
+            (ticket_id, confirmation_token),
+        )
+
+        db.commit()
+
+        return {
+            "status": "created",
+            "ticket_id": ticket_id,
+            "ticket": record,
+            "already_created": False,
+        }
+
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        db.close()
 
 
 #When we start the server, we use this main() function to run it. The MCP protocol messages travel through stdout, so avoid using print() for ordinary debugging here. The server is started using the stdio transport, which means that it will communicate with clients through standard input and output streams. This is useful for running the server as a subprocess and allows for easy integration with other tools and scripts.

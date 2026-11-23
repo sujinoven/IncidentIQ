@@ -53,7 +53,7 @@ from incidentiq.core.models import (
     SourceReference,
 )
 from incidentiq.core.security import AccessDeniedError
-from incidentiq.mcp.client import call_tool
+from incidentiq.mcp.client import call_agent_tool
 from incidentiq.rag.retriever import retrieve_knowledge
 from incidentiq.rag.service import (
     GroundedAnswer,
@@ -475,27 +475,104 @@ def analyze_incident(state: IncidentIQState) -> dict:
 # 9. TICKET WORKFLOW PLACEHOLDER
 # ---------------------------------------------------------
 
+
 def ticket_node(state: IncidentIQState) -> dict:
     """
-    Handle ticket requests until the MCP ticket workflow
-    and human confirmation step are implemented.
+    Prepare a ticket through MCP without creating it.
 
-    Why:
-        We must never claim that a ticket was created
-        when no actual operation was performed.
+    Expected request format:
+        Create ticket:
+        Service: SVC-VPN
+        Title: VPN connection failure
+        Description: VPN disconnects repeatedly
+        Priority: P3
+
+    The final write is intentionally not performed here.
     """
+    request = state["request"]
+
+    # Extract explicitly labeled fields from the request.
+    fields = {}
+
+    for line in request.query.splitlines():
+        if ":" not in line:
+            continue
+
+        key, value = line.split(":", 1)
+        key = key.strip().lower()
+        value = value.strip()
+
+        #Extracts ticket fields from the request text, but ignores any other lines.
+        if key in {"service", "title", "description", "priority"}:
+            fields[key] = value
+
+    required = {"service", "title", "description"}
+
+    if not required.issubset(fields):
+        return {
+            "response": AgentResponse(
+                answer=(
+                    "Please provide the ticket details using:\n"
+                    "Create ticket:\n"
+                    "Service: SVC-VPN\n"
+                    "Title: VPN connection failure\n"
+                    "Description: VPN disconnects repeatedly\n"
+                    "Priority: P3"
+                ),
+                framework="langgraph",
+                success=False,
+                error="TICKET_DETAILS_REQUIRED",
+            )
+        }
+
+    # The MCP server validates the ticket and stores
+    # a pending request, but does not create a ticket.
+    result = call_tool(
+        tool_name="prepare_ticket", # Call the prepare_ticket tool through the MCP client, passing the extracted fields and user context.
+        arguments={
+            "service_id": fields["service"],
+            "title": fields["title"],
+            "description": fields["description"],
+            "priority": fields.get("priority", "P3"),
+        },
+        user=request.user,
+    )
+
+    if result.get("status") != "awaiting_confirmation":
+        return {
+            "response": AgentResponse(
+                answer="The ticket could not be prepared.",
+                framework="langgraph",
+                success=False,
+                error="TICKET_PREPARATION_FAILED",
+            )
+        }
+
+    preview = result["preview"]
+
+    # Show the proposed ticket without revealing the token
+    # in the natural-language answer.
+    answer = (
+        "Please review this ticket before creation:\n\n"
+        f"Service: {preview['service_id']}\n"
+        f"Title: {preview['title']}\n"
+        f"Description: {preview['description']}\n"
+        f"Priority: {preview['priority']}\n"
+        f"Requester: {preview['requester_id']}\n\n"
+        "Status: Awaiting confirmation.\n"
+        "No ticket has been created."
+    )
 
     return {
         "response": AgentResponse(
-            answer=(
-                "Ticket creation is not available yet. "
-                "No ticket has been created."
-            ),
+            answer=answer,
             framework="langgraph",
-            success=False,
-            error="TICKET_WORKFLOW_NOT_IMPLEMENTED",
+            tools_used=["prepare_ticket"],
+            pending_confirmation_token=result["confirmation_token"], #Lets the application know that the ticket is pending confirmation, without exposing the token in the answer.
+            success=True,
         )
     }
+
 
 
 # ---------------------------------------------------------
@@ -692,3 +769,8 @@ class LangGraphAgent:
 
         # Validate the response against our shared schema.
         return AgentResponse.model_validate(response)
+
+
+
+
+

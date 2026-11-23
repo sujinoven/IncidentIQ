@@ -109,3 +109,37 @@ def call_tool(
             user=user,
         )
     )
+
+
+# Tools the agent is allowed to request.
+AGENT_ALLOWED_TOOLS = frozenset({
+    "get_incident",
+    "search_incidents",
+    "get_service_status",
+    "search_tickets",
+    "get_ticket",
+    "search_assets",
+    "prepare_ticket",
+})
+
+
+def call_agent_tool(
+    tool_name: str,
+    arguments: dict,
+    user: UserContext,
+) -> dict:
+    """
+    MCP adapter for agent-controlled operations.
+
+    Reject state-changing tools such as create_ticket.
+    """
+    if tool_name not in AGENT_ALLOWED_TOOLS:
+        raise PermissionError(
+            f"Agent cannot invoke tool: {tool_name}"
+        )
+
+    return call_tool(
+        tool_name=tool_name,
+        arguments=arguments,
+        user=user,
+    )
