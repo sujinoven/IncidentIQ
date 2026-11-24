@@ -2,7 +2,10 @@
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
 
+# Load .env values into the process environment.
+load_dotenv()
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(

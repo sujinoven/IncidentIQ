@@ -5,7 +5,18 @@ from langchain_core.documents import Document
 from incidentiq.core.models import UserContext
 from incidentiq.core.security import ROLE_PERMISSIONS
 from incidentiq.rag.vectorstore import get_vectorstore
+from langsmith import traceable
 
+@traceable(
+    name="IncidentIQ Knowledge Retrieval",
+    run_type="retriever",
+    process_inputs=lambda inputs: {
+        "k": inputs.get("k", 4)
+    },
+    process_outputs=lambda outputs: {
+        "retrieval_completed": True
+    },
+)
 
 def retrieve_knowledge(
     query: str,

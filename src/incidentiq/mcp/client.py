@@ -17,6 +17,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from incidentiq.core.models import UserContext
+from langsmith import traceable
 
 
 async def _call_tool_async(
@@ -123,16 +124,32 @@ AGENT_ALLOWED_TOOLS = frozenset({
 })
 
 
+
+
+@traceable(
+    name="IncidentIQ MCP Tool",
+    run_type="tool",
+    process_inputs=lambda inputs: {
+        "tool_name": inputs.get("tool_name")
+    },
+    process_outputs=lambda outputs: {
+        "result_recorded": True
+    },
+)
 def call_agent_tool(
     tool_name: str,
     arguments: dict,
     user: UserContext,
 ) -> dict:
     """
-    MCP adapter for agent-controlled operations.
+    Execute an authorized agent-facing MCP tool.
 
-    Reject state-changing tools such as create_ticket.
+    LangSmith records the execution duration and tool name.
+
+    Raw tool arguments, user context, and returned
+    operational records are excluded from this custom trace.
     """
+
     if tool_name not in AGENT_ALLOWED_TOOLS:
         raise PermissionError(
             f"Agent cannot invoke tool: {tool_name}"
