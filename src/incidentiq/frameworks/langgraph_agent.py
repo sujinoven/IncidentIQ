@@ -756,8 +756,20 @@ class LangGraphAgent:
 
         # Execute the graph from START until END.
         final_state = incidentiq_graph.invoke(
-            initial_state
-        )
+    initial_state,
+    config={
+        "run_name": "IncidentIQ LangGraph",
+        "tags": [
+            "incidentiq",
+            "langgraph",
+            "development",
+        ],
+        "metadata": {
+            "framework": "langgraph",
+            "user_role": request.user.role,
+        },
+    },
+)
 
         # Read the final response from graph state.
         response = final_state.get("response")
