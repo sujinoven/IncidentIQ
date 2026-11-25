@@ -9,6 +9,7 @@ authors = [
 ]
 
 dependencies = [
+    "agno>=3.2.1",
     "chromadb>=1.5.9",
     "crewai>=1.15.45",
     "langchain-chroma>=1.1.0",
