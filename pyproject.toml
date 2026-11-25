@@ -10,6 +10,7 @@ authors = [
 
 dependencies = [
     "chromadb>=1.5.9",
+    "crewai>=1.15.45",
     "langchain-chroma>=1.1.0",
     "langchain-core>=1.8.4",
     "langchain-openai>=1.8.5",
