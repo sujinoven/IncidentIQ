@@ -1,29 +1,17 @@
 
 import os
+import logging
 
 from pathlib import Path
-
-import streamlit as st
-
-from incidentiq.core.models import (
-    AgentRequest,
-    AgentResponse,
-    UserContext,
-    FrameworkName,
-)
+from time import perf_counter  #Latency measurement
+from statistics import mean
+from datetime import datetime, timezone
 
 
 # =========================================================
-# 1. APPLICATION CONFIGURATION
+# 1. DEVELOPMENT TELEMETRY CONFIGURATION
 # =========================================================
 
-
-PROJECT_ROOT = Path(
-    __file__
-).resolve().parents[3]
-
-
-# Disable optional development telemetry.
 
 os.environ.setdefault(
     "LANGSMITH_TRACING",
@@ -46,30 +34,61 @@ os.environ.setdefault(
 )
 
 
+import streamlit as st
+
+from pydantic import ValidationError
+
+from incidentiq.core.models import (
+    AgentRequest,
+    AgentResponse,
+    UserContext,
+    FrameworkName,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+# =========================================================
+# 2. APPLICATION CONFIGURATION
+# =========================================================
+
+
+PROJECT_ROOT = Path(
+    __file__
+).resolve().parents[3]
+
+
+EVALUATION_DIR = (
+    PROJECT_ROOT
+    / ".local"
+    / "evaluation"
+)
+
+
 st.set_page_config(
-
     page_title="IncidentIQ",
-
     page_icon="🛡️",
-
     layout="wide",
-
     initial_sidebar_state="expanded",
 )
 
 
 # =========================================================
-# 2. FRAMEWORK CONFIGURATION
+# 3. FRAMEWORK CONFIGURATION
 # =========================================================
 
 
 FRAMEWORK_OPTIONS = {
-
     "LangGraph": "langgraph",
-
     "CrewAI": "crewai",
-
     "Agno": "agno",
+}
+
+
+FRAMEWORK_LABELS = {
+    value: key
+    for key, value in FRAMEWORK_OPTIONS.items()
 }
 
 
@@ -93,17 +112,20 @@ FRAMEWORK_DESCRIPTIONS = {
 
 
 # =========================================================
-# 3. SIMULATED ENTERPRISE USERS
+# 4. SIMULATED ENTERPRISE USER CONFIGURATION
 # =========================================================
 
 
 ROLE_OPTIONS = {
-
     "Employee": "employee",
-
     "IT Support": "it_support",
-
     "IT Administrator": "it_admin",
+}
+
+
+ROLE_LABELS = {
+    value: key
+    for key, value in ROLE_OPTIONS.items()
 }
 
 
@@ -135,8 +157,8 @@ DEMO_USERS = {
 ROLE_DESCRIPTIONS = {
 
     "employee": (
-        "Access employee-public enterprise "
-        "knowledge and permitted IT services."
+        "Access employee-public knowledge "
+        "and permitted enterprise IT services."
     ),
 
     "it_support": (
@@ -152,24 +174,86 @@ ROLE_DESCRIPTIONS = {
 
 
 # =========================================================
-# 4. APPLICATION NAVIGATION
+# 5. APPLICATION NAVIGATION
 # =========================================================
 
 
 NAVIGATION_OPTIONS = [
-
     "IT Assistant",
-
     "Ticket Management",
-
     "Evaluation Dashboard",
-
     "About IncidentIQ",
 ]
 
 
 # =========================================================
-# 5. SESSION STATE INITIALIZATION
+# 6. QUICK ACTION CONFIGURATION
+# =========================================================
+
+
+QUICK_ACTIONS = [
+
+    {
+        "label": "📚 Knowledge QA",
+        "query": "What does VPN Error 809 mean?",
+    },
+
+    {
+        "label": "🔍 Investigate incident",
+        "query": "Investigate incident INC-0012",
+    },
+
+    {
+        "label": "📡 Service status",
+        "query": "Check status of SVC-VPN",
+    },
+
+    {
+        "label": "🖥️ Search incidents",
+        "query": "Search VPN incidents",
+    },
+]
+
+
+STAFF_QUICK_ACTIONS = [
+
+    {
+        "label": "🎫 Search tickets",
+        "query": "Search VPN tickets",
+    },
+
+    {
+        "label": "💻 Search assets",
+        "query": "Find laptop assets",
+    },
+]
+
+
+# =========================================================
+# 7. ERROR CLASSIFICATION
+# =========================================================
+
+
+SECURITY_ERRORS = {
+    "ACCESS_DENIED",
+    "RESTRICTED_ACTION",
+}
+
+
+TECHNICAL_ERRORS = {
+    "EXECUTION_FAILED",
+    "INCIDENT_LOOKUP_FAILED",
+    "OPERATIONAL_LOOKUP_FAILED",
+    "TICKET_PREPARATION_FAILED",
+    "INVALID_TICKET_PREVIEW",
+    "INVALID_STRUCTURED_OUTPUT",
+    "INVALID_CITATIONS",
+    "INVESTIGATION_VALIDATION_FAILED",
+}
+
+
+# =========================================================
+# 8. SESSION STATE INITIALIZATION
 # =========================================================
 
 
@@ -196,7 +280,7 @@ def initialize_session_state() -> None:
 
 
 # =========================================================
-# 6. SESSION CONTEXT ISOLATION
+# 9. WORKSPACE ISOLATION
 # =========================================================
 
 
@@ -213,16 +297,12 @@ def clear_workspace() -> None:
 
 def synchronize_context(
     framework: FrameworkName,
-
     user: UserContext,
 ) -> None:
 
     current_context = (
-
         framework,
-
         user.user_id,
-
         user.role,
     )
 
@@ -248,7 +328,7 @@ def synchronize_context(
 
 
 # =========================================================
-# 7. FRAMEWORK FACTORY
+# 10. FRAMEWORK FACTORY
 # =========================================================
 
 
@@ -286,49 +366,212 @@ def build_agent(
 
 
 # =========================================================
-# 8. COMMON AGENT EXECUTION INTERFACE
+# 11. COMMON AGENT EXECUTION INTERFACE
 # =========================================================
 
 
 def execute_agent(
     query: str,
-
     framework: FrameworkName,
-
     user: UserContext,
 ) -> AgentResponse:
 
-    request = AgentRequest(
+    try:
 
-        query=query,
-
-        framework=framework,
-
-        user=user,
-    )
-    #Instead of creating all three frameworks when Streamlit starts, we instantiate only the selected framework when an agent request is executed.
-    agent = build_agent(
-        framework
-    )
-
-    response = agent.run(
-        request
-    )
-
-    if not isinstance(
-        response,
-        AgentResponse,
-    ):
-
-        raise TypeError(
-            "Invalid agent response."
+        request = AgentRequest(
+            query=query,
+            framework=framework,
+            user=user,
         )
 
-    return response
+    except ValidationError:
+
+        return AgentResponse(
+            answer=(
+                "Please provide a valid request "
+                "containing 3 to 2000 characters."
+            ),
+            framework=framework,
+            success=False,
+            error="INVALID_INPUT",
+        )
+
+    try:
+
+        agent = build_agent(
+            framework
+        )
+
+        response = agent.run(
+            request
+        )
+
+        if not isinstance(
+            response,
+            AgentResponse,
+        ):
+
+            return AgentResponse(
+                answer=(
+                    "The agent returned an "
+                    "invalid response."
+                ),
+                framework=framework,
+                success=False,
+                error="INVALID_STRUCTURED_OUTPUT",
+            )
+
+        if response.framework != framework:
+
+            return AgentResponse(
+                answer=(
+                    "The response framework "
+                    "could not be verified."
+                ),
+                framework=framework,
+                success=False,
+                error="INVALID_STRUCTURED_OUTPUT",
+            )
+
+        return response
+
+    except PermissionError:
+
+        return AgentResponse(
+            answer=(
+                "You do not have permission "
+                "to perform this operation."
+            ),
+            framework=framework,
+            success=False,
+            error="ACCESS_DENIED",
+        )
+
+    except Exception as exc:
+
+        logger.error(
+            "Agent execution failed: %s",
+            type(exc).__name__,
+        )
+
+        return AgentResponse(
+            answer=(
+                "The request could not be completed. "
+                "Please try again or contact IT support."
+            ),
+            framework=framework,
+            success=False,
+            error="EXECUTION_FAILED",
+        )
 
 
 # =========================================================
-# 9. APPLICATION SIDEBAR
+# 12. SESSION EXECUTION METRICS
+# =========================================================
+
+
+def record_execution(
+    response: AgentResponse,
+    latency: float,
+) -> None:
+    #The assistant message is already stored in the session state, so we only need to record the execution metrics here.
+    record = {
+
+        "framework": response.framework,
+
+        "success": response.success,
+
+        "error": response.error,
+
+        "latency_seconds": round(
+            latency,
+            3,
+        ),
+
+        "citation_count": len(
+            response.sources
+        ),
+
+        "tool_count": len(
+            response.tools_used
+        ),
+
+        "security_refusal": (
+            response.error in SECURITY_ERRORS
+        ),
+
+        "technical_failure": (
+            response.error in TECHNICAL_ERRORS
+        ),
+
+        "timestamp": datetime.now(
+            timezone.utc
+        ).isoformat(),
+    }
+    #Both assistant and user message are recorded in the session state, but we only want to record the execution metrics for the assistant message. Therefore, we append the record to the execution history here.
+    st.session_state.execution_history.append(
+        record
+    )
+
+
+def get_session_metrics() -> dict:
+
+    history = (
+        st.session_state.execution_history
+    )
+
+    total_requests = len(
+        history
+    )
+
+    successful_requests = sum(
+        1
+        for record in history
+        if record["success"]
+    )
+
+    security_refusals = sum(
+        1
+        for record in history
+        if record["security_refusal"]
+    )
+
+    technical_failures = sum(
+        1
+        for record in history
+        if record["technical_failure"]
+    )
+
+    average_latency = (
+
+        mean([
+            record["latency_seconds"]
+            for record in history
+        ])
+
+        if history
+
+        else 0.0
+    )
+
+    return {
+
+        "total_requests": total_requests,
+
+        "successful_requests": (
+            successful_requests
+        ),
+
+        "security_refusals": security_refusals,
+
+        "technical_failures": technical_failures,
+
+        "average_latency": average_latency,
+    }
+
+
+# =========================================================
+# 13. APPLICATION SIDEBAR
 # =========================================================
 
 
@@ -350,43 +593,28 @@ def render_sidebar() -> tuple[
 
         st.divider()
 
-        # -------------------------------------------------
-        # Navigation
-        # -------------------------------------------------
-
         st.subheader(
             "Workspace"
         )
 
         page = st.radio(
-
             "Navigate",
-
             options=NAVIGATION_OPTIONS,
-
             label_visibility="collapsed",
-
             key="workspace_navigation",
         )
 
         st.divider()
-
-        # -------------------------------------------------
-        # Framework selection
-        # -------------------------------------------------
 
         st.subheader(
             "Agent Configuration"
         )
 
         framework_label = st.selectbox(
-
             "Agent framework",
-
             options=list(
                 FRAMEWORK_OPTIONS.keys()
             ),
-
             key="framework_selector",
         )
 
@@ -402,22 +630,15 @@ def render_sidebar() -> tuple[
 
         st.divider()
 
-        # -------------------------------------------------
-        # Enterprise role selection
-        # -------------------------------------------------
-
         st.subheader(
             "User Context"
         )
 
         role_label = st.selectbox(
-
             "Enterprise role",
-
             options=list(
                 ROLE_OPTIONS.keys()
             ),
-
             key="role_selector",
         )
 
@@ -426,18 +647,13 @@ def render_sidebar() -> tuple[
         ]
 
         user_id = st.selectbox(
-
             "User identity",
-
             options=DEMO_USERS[role],
-
             key=f"user_selector_{role}",
         )
 
         user = UserContext(
-
             user_id=user_id,
-
             role=role,
         )
 
@@ -446,20 +662,22 @@ def render_sidebar() -> tuple[
         )
 
         st.warning(
-            "Demo identity selection only. "
-            "This is not production authentication."
+            "Simulated enterprise identity. "
+            "Not production authentication."
+        )
+
+        # Synchronize before rendering session
+        # metrics to prevent stale context display.
+
+        synchronize_context(
+            framework=framework,
+            user=user,
         )
 
         st.divider()
 
-        # -------------------------------------------------
-        # Workspace controls
-        # -------------------------------------------------
-
         if st.button(
-
             "Clear workspace",
-
             use_container_width=True,
         ):
 
@@ -479,13 +697,12 @@ def render_sidebar() -> tuple[
 
 
 # =========================================================
-# 10. APPLICATION HEADER
+# 14. APPLICATION HEADER
 # =========================================================
 
 
 def render_header(
     framework: FrameworkName,
-
     user: UserContext,
 ) -> None:
 
@@ -498,68 +715,561 @@ def render_header(
         "Incident Resolution Copilot"
     )
 
-    framework_labels = {
-
-        value: key
-
-        for key, value
-        in FRAMEWORK_OPTIONS.items()
-    }
-
-    role_labels = {
-
-        value: key
-
-        for key, value
-        in ROLE_OPTIONS.items()
-    }
-
-    col1, col2, col3 = st.columns(
-        3
-    )
+    col1, col2, col3 = st.columns(3)
 
     with col1:
 
         st.metric(
-
-            label="Active Framework",
-
-            value=framework_labels[
-                framework
-            ],
+            "Active Framework",
+            FRAMEWORK_LABELS[framework],
         )
 
     with col2:
 
         st.metric(
-
-            label="Enterprise Role",
-
-            value=role_labels[
-                user.role
-            ],
+            "Enterprise Role",
+            ROLE_LABELS[user.role],
         )
 
     with col3:
 
         st.metric(
-
-            label="User Identity",
-
-            value=user.user_id,
+            "User Identity",
+            user.user_id,
         )
 
     st.divider()
 
 
 # =========================================================
-# 11. IT ASSISTANT PAGE
+# 15. SIDEBAR SESSION METRICS
+# =========================================================
+
+
+def render_session_metrics() -> None:
+
+    metrics = get_session_metrics()
+
+    with st.sidebar:
+
+        st.divider()
+
+        st.subheader(
+            "Session Metrics"
+        )
+
+        st.metric(
+            "Requests",
+            metrics["total_requests"],
+        )
+
+        st.metric(
+            "Successful Responses",
+            metrics["successful_requests"],
+        )
+
+        st.metric(
+            "Average Latency",
+            f"{metrics['average_latency']:.2f}s",
+        )
+
+        st.metric(
+            "Security Refusals",
+            metrics["security_refusals"],
+        )
+
+        st.metric(
+            "Technical Failures",
+            metrics["technical_failures"],
+        )
+
+        st.caption(
+            "Session metrics are operational "
+            "statistics, not benchmark scores."
+        )
+
+
+# =========================================================
+# 16. QUICK ACTIONS
+# =========================================================
+
+
+def render_quick_actions(
+    user: UserContext,
+) -> str | None:
+
+    selected_query = None
+
+    st.caption(
+        "Quick actions"
+    )
+
+    columns = st.columns(2)
+
+    for index, action in enumerate(
+        QUICK_ACTIONS
+    ):
+
+        with columns[index % 2]:
+
+            if st.button(
+                action["label"],
+                key=f"quick_action_{index}",
+                use_container_width=True,
+            ):
+
+                selected_query = (
+                    action["query"]
+                )
+
+    if user.role in {
+        "it_support",
+        "it_admin",
+    }:
+
+        staff_columns = st.columns(2)
+
+        for index, action in enumerate(
+            STAFF_QUICK_ACTIONS
+        ):
+
+            with staff_columns[index]:
+
+                if st.button(
+                    action["label"],
+                    key=f"staff_action_{index}",
+                    use_container_width=True,
+                ):
+
+                    selected_query = (
+                        action["query"]
+                    )
+
+    return selected_query
+
+
+# =========================================================
+# 17. KNOWLEDGE CITATION RENDERING
+# =========================================================
+
+
+def render_sources(
+    sources: list[dict],
+) -> None:
+
+    if not sources:
+
+        return
+
+    with st.expander(
+        f"📚 Knowledge Sources ({len(sources)})"
+    ):
+
+        for source in sources:
+
+            document_id = source.get(
+                "document_id",
+                "Unknown",
+            )
+
+            title = source.get(
+                "title",
+                "Untitled document",
+            )
+
+            st.text(
+                f"{document_id} — {title}"
+            )
+
+
+# =========================================================
+# 18. TOOL EXECUTION RENDERING
+# =========================================================
+
+
+def render_tools(
+    tools: list[str],
+) -> None:
+
+    if not tools:
+
+        return
+
+    with st.expander(
+        f"🔧 Tool Execution ({len(tools)})"
+    ):
+
+        for index, tool in enumerate(
+            tools,
+            start=1,
+        ):
+
+            tool_type = (
+
+                "RAG Retrieval"
+
+                if tool == "retrieve_knowledge"
+
+                else "MCP Tool"
+            )
+
+            st.text(
+                f"{index}. {tool} — {tool_type}"
+            )
+
+        st.caption(
+            "Tools reported by the framework. "
+            "A listed tool does not necessarily "
+            "indicate successful execution."
+        )
+
+
+# =========================================================
+# 19. RESPONSE STATUS RENDERING
+# =========================================================
+
+
+def render_response_status(
+    message: dict,
+) -> None:
+
+    error = message.get(
+        "error"
+    )
+
+    if message.get(
+        "awaiting_confirmation"
+    ):
+
+        st.warning(
+            "Ticket prepared. Human confirmation "
+            "is required before creation."
+        )
+
+    elif error in SECURITY_ERRORS:
+
+        st.warning(
+            f"Security policy: {error}"
+        )
+
+    elif error in TECHNICAL_ERRORS:
+
+        st.error(
+            f"Execution error: {error}"
+        )
+
+    elif message.get("success"):
+
+        st.success(
+            "Request completed"
+        )
+
+    else:
+
+        st.info(
+            f"Request not completed: "
+            f"{error or 'UNKNOWN_STATUS'}"
+        )
+
+    framework = message.get(
+        "framework",
+        "",
+    )
+
+    framework_label = FRAMEWORK_LABELS.get(
+        framework,
+        framework,
+    )
+
+    latency = message.get(
+        "latency_seconds",
+        0.0,
+    )
+
+    st.caption(
+        f"Framework: {framework_label} "
+        f"| Latency: {latency:.3f}s"
+    )
+
+
+# =========================================================
+# 20. CHAT MESSAGE RENDERING
+# =========================================================
+
+
+def render_message(
+    message: dict,
+) -> None:
+
+    role = message.get(
+        "role",
+        "assistant",
+    )
+
+    with st.chat_message(role):
+
+        if role == "user":
+
+            st.text(
+                message["content"]
+            )
+
+            return
+
+        # Render model output as plain text.
+        # Avoid interpreting untrusted HTML,
+        # external images or generated links.
+
+        st.text(
+            message["content"]
+        )
+
+        render_sources(
+            message.get(
+                "sources",
+                [],
+            )
+        )
+
+        render_tools(
+            message.get(
+                "tools_used",
+                [],
+            )
+        )
+
+        render_response_status(
+            message
+        )
+
+
+def render_chat_history() -> None:
+
+    for message in (
+        st.session_state.messages
+    ):
+
+        render_message(
+            message
+        )
+
+
+# =========================================================
+# 21. PENDING TICKET STATE
+# =========================================================
+
+
+def store_pending_ticket(
+    response: AgentResponse,
+    framework: FrameworkName,
+    user: UserContext,
+) -> None:
+
+    token = (
+        response.pending_confirmation_token
+    )
+
+    if not token:
+
+        return
+
+    if not response.success:
+
+        return
+
+    if "prepare_ticket" not in response.tools_used:
+
+        return
+
+    st.session_state.pending_ticket = {
+
+        "confirmation_token": token,
+
+        "preview": response.answer,
+
+        "framework": framework,
+
+        "user_id": user.user_id,
+
+        "user_role": user.role,
+
+        "prepared_at": datetime.now(
+            timezone.utc
+        ).isoformat(),
+    }
+
+
+# =========================================================
+# 22. NORMALIZE ASSISTANT MESSAGE
+# =========================================================
+
+
+def build_assistant_message(
+    response: AgentResponse,
+    latency: float,
+) -> dict:
+
+    return {
+
+        "role": "assistant",
+
+        "content": response.answer,
+
+        "framework": response.framework,
+
+        "sources": [
+
+            source.model_dump()
+
+            for source in response.sources
+        ],
+
+        "tools_used": list(
+            response.tools_used
+        ),
+
+        "success": response.success,
+
+        "error": response.error,
+
+        "latency_seconds": round(
+            latency,
+            3,
+        ),
+
+        "awaiting_confirmation": bool(
+            response.success
+            and response.pending_confirmation_token
+            and "prepare_ticket" in response.tools_used
+        ),
+    }
+
+
+# =========================================================
+# 23. PROCESS USER QUERY
+# =========================================================
+
+
+def process_user_query(
+    query: str,
+    framework: FrameworkName,
+    user: UserContext,
+) -> None:
+
+    query = query.strip()
+
+    if not query:
+
+        st.warning(
+            "Please enter a valid IT request."
+        )
+
+        return
+
+    # Prevent an existing pending ticket from
+    # being silently replaced by another request.
+
+    if st.session_state.pending_ticket is not None:
+
+        st.warning(
+            "A ticket is awaiting confirmation. "
+            "Review it in Ticket Management "
+            "before submitting another request."
+        )
+
+        return
+    #Each user interaction produces two conversation records.
+    user_message = {
+
+        "role": "user",
+
+        "content": query,
+    }
+
+    st.session_state.messages.append(
+        user_message
+    )
+
+    render_message(
+        user_message
+    )
+
+    # -----------------------------------------------------
+    # Execute selected agent and measure latency
+    # -----------------------------------------------------
+
+    start_time = perf_counter()
+
+    with st.spinner(
+        f"{FRAMEWORK_LABELS[framework]} "
+        "is processing your request..."
+    ):
+
+        response = execute_agent(
+            query=query,
+            framework=framework,
+            user=user,
+        )
+
+    latency = (
+        perf_counter() - start_time
+    )
+
+    # -----------------------------------------------------
+    # Store pending confirmation securely in
+    # server-side session state
+    # -----------------------------------------------------
+
+    store_pending_ticket(
+        response=response,
+        framework=framework,
+        user=user,
+    )
+
+    # -----------------------------------------------------
+    # Normalize response without storing the
+    # confirmation token in conversation history
+    # -----------------------------------------------------
+
+    assistant_message = build_assistant_message(
+        response=response,
+        latency=latency,
+    )
+
+    st.session_state.messages.append(
+        assistant_message
+    )
+
+    # -----------------------------------------------------
+    # Record operational session metrics
+    # -----------------------------------------------------
+
+    record_execution(
+        response=response,
+        latency=latency,
+    )
+
+    # -----------------------------------------------------
+    # Render assistant response
+    # -----------------------------------------------------
+
+    render_message(
+        assistant_message
+    )
+
+    # Refresh the application so that pending
+    # ticket state and session metrics are current.
+
+    st.rerun()
+
+
+# =========================================================
+# 24. IT ASSISTANT PAGE
 # =========================================================
 
 
 def render_assistant_page(
     framework: FrameworkName,
-
     user: UserContext,
 ) -> None:
 
@@ -567,101 +1277,76 @@ def render_assistant_page(
         "IT Support Assistant"
     )
 
-    st.write(
-        "Ask questions about enterprise IT "
-        "knowledge, incidents and services."
+    st.caption(
+        "Ask questions about enterprise knowledge, "
+        "incidents, services and operational resources."
     )
 
-    col1, col2 = st.columns(
-        2
+    pending_ticket = (
+        st.session_state.pending_ticket
     )
 
-    with col1:
+    has_pending_ticket = (
+        pending_ticket is not None
+    )
 
-        with st.container(
-            border=True
-        ):
+    if has_pending_ticket:
 
-            st.subheader(
-                "📚 Knowledge Assistant"
-            )
+        st.warning(
+            "A ticket is awaiting confirmation. "
+            "Open Ticket Management to review it."
+        )
 
-            st.write(
-                "Retrieve authorized enterprise "
-                "knowledge, policies and runbooks."
-            )
+    selected_query = None
 
-            st.code(
-                "What does VPN Error 809 mean?",
-                language=None,
-            )
+    if not has_pending_ticket:
 
-        with st.container(
-            border=True
-        ):
-
-            st.subheader(
-                "🔍 Incident Investigation"
-            )
-
-            st.write(
-                "Investigate incidents using "
-                "operational records and knowledge."
-            )
-
-            st.code(
-                "Investigate incident INC-0012",
-                language=None,
-            )
-
-    with col2:
-
-        with st.container(
-            border=True
-        ):
-
-            st.subheader(
-                "📡 Service Health"
-            )
-
-            st.write(
-                "Retrieve current recorded "
-                "enterprise service status."
-            )
-
-            st.code(
-                "Check status of SVC-VPN",
-                language=None,
-            )
-
-        with st.container(
-            border=True
-        ):
-
-            st.subheader(
-                "🖥️ Operational Search"
-            )
-
-            st.write(
-                "Search authorized incidents, "
-                "support tickets and IT assets."
-            )
-
-            st.code(
-                "Search VPN incidents",
-                language=None,
-            )
+        selected_query = render_quick_actions(
+            user
+        )
 
     st.divider()
 
-    st.info(
-        "The conversational assistant will "
-        "be enabled in Module 11.2."
+    if not st.session_state.messages:
+
+        with st.chat_message("assistant"):
+
+            st.write(
+                "Welcome to IncidentIQ. "
+                "I can help you retrieve enterprise "
+                "IT knowledge, investigate incidents "
+                "and check authorized operational data."
+            )
+
+            st.caption(
+                "Choose a quick action or enter "
+                "your own IT support question."
+            )
+
+    render_chat_history()
+
+    chat_query = st.chat_input(
+        "Ask an enterprise IT question...",
+        max_chars=2000,
+        disabled=has_pending_ticket,
     )
+
+    query = (
+        chat_query
+        or selected_query
+    )
+
+    if query:
+
+        process_user_query(
+            query=query,
+            framework=framework,
+            user=user,
+        )
 
 
 # =========================================================
-# 12. TICKET MANAGEMENT PAGE
+# 25. TICKET MANAGEMENT PAGE
 # =========================================================
 
 
@@ -672,62 +1357,109 @@ def render_ticket_page() -> None:
     )
 
     st.write(
-        "Prepare enterprise IT support tickets "
-        "using a human confirmation workflow."
+        "Prepare and review enterprise IT "
+        "support tickets."
     )
 
-    st.info(
-        "Ticket preparation, preview and "
-        "confirmation will be integrated "
-        "in Module 11.3."
+    pending_ticket = (
+        st.session_state.pending_ticket
     )
+
+    if pending_ticket is not None:
+
+        st.warning(
+            "A ticket is awaiting confirmation."
+        )
+
+        st.subheader(
+            "Pending Ticket Preview"
+        )
+
+        st.text(
+            pending_ticket["preview"]
+        )
+
+        st.caption(
+            "Requester: "
+            f"{pending_ticket['user_id']}"
+        )
+
+        st.info(
+            "Ticket confirmation will be enabled "
+            "in the next implementation step."
+        )
+
+        if st.button(
+            "Discard pending preview",
+            type="secondary",
+        ):
+
+            st.session_state.pending_ticket = None
+
+            st.rerun()
+
+        st.caption(
+            "Discarding the preview clears the "
+            "local session only. The backend "
+            "preparation record expires separately."
+        )
+
+    else:
+
+        st.info(
+            "No ticket is currently awaiting "
+            "confirmation."
+        )
+
+        st.write(
+            "The dedicated ticket preparation "
+            "form will be added in Module 11.3."
+        )
 
 
 # =========================================================
-# 13. EVALUATION DASHBOARD PAGE
+# 26. EVALUATION DASHBOARD PAGE
 # =========================================================
 
 
-def render_evaluation_page() -> None:
+def render_evaluation_page(
+    user: UserContext,
+) -> None:
 
     st.header(
         "Framework Evaluation Dashboard"
     )
+
+    # Evaluation reports can contain privileged
+    # enterprise test queries and answers.
+
+    if user.role != "it_admin":
+
+        st.warning(
+            "The evaluation dashboard is "
+            "restricted to IT administrators."
+        )
+
+        return
 
     st.write(
         "Compare LangGraph, CrewAI and Agno "
         "using shared enterprise evaluation metrics."
     )
 
-    evaluation_dir = (
-
-        PROJECT_ROOT
-
-        / ".local"
-
-        / "evaluation"
-    )
-
     reports = []
 
-    if evaluation_dir.exists():
+    if EVALUATION_DIR.exists():
 
         reports = sorted(
-
-            evaluation_dir.glob(
+            EVALUATION_DIR.glob(
                 "comparison_*.json"
             ),
-
-            key=lambda path: (
-                path.stat().st_mtime
-            ),
-
+            key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
 
-    col1, col2 = st.columns(
-        2
-    )
+    col1, col2 = st.columns(2)
 
     with col1:
 
@@ -743,15 +1475,27 @@ def render_evaluation_page() -> None:
             len(reports),
         )
 
+    if reports:
+
+        st.caption(
+            f"Latest report: {reports[0].name}"
+        )
+
+    else:
+
+        st.info(
+            "No comparison reports are available. "
+            "Run the evaluation runner first."
+        )
+
     st.info(
-        "Detailed benchmark charts and metric "
-        "comparisons will be implemented "
-        "in Module 11.4."
+        "Detailed benchmark visualizations "
+        "will be implemented in Module 11.4."
     )
 
 
 # =========================================================
-# 14. ABOUT PAGE
+# 27. ABOUT PAGE
 # =========================================================
 
 
@@ -765,7 +1509,7 @@ def render_about_page() -> None:
         """
 ### Enterprise IT Knowledge & Incident Resolution Copilot
 
-IncidentIQ is an enterprise agentic AI capstone
+IncidentIQ is an enterprise agentic AI application
 designed to demonstrate intelligent IT support
 using authorized organizational knowledge and
 operational data.
@@ -802,17 +1546,23 @@ operational data.
 
 ### Enterprise Environment
 
-NovaTech Solutions is a fictional organization
-created for this capstone project.
+NovaTech Solutions is a fictional enterprise
+created for this demonstration.
 
-All enterprise data used in this demonstration
+All organizational data used in this application
 is synthetic.
+
+### Security Notice
+
+The application uses simulated enterprise
+identities and is intended for local development
+and demonstration, not production deployment.
         """
     )
 
 
 # =========================================================
-# 15. APPLICATION FOOTER
+# 28. APPLICATION FOOTER
 # =========================================================
 
 
@@ -821,13 +1571,13 @@ def render_footer() -> None:
     st.divider()
 
     st.caption(
-        "IncidentIQ | Enterprise Agentic AI Capstone "
+        "IncidentIQ | Enterprise Agentic AI "
         "| NovaTech Solutions"
     )
 
 
 # =========================================================
-# 16. MAIN APPLICATION
+# 29. MAIN APPLICATION
 # =========================================================
 
 
@@ -839,26 +1589,15 @@ def main() -> None:
         render_sidebar()
     )
 
-    synchronize_context(
-
-        framework=framework,
-
-        user=user,
-    )
-
     render_header(
-
         framework=framework,
-
         user=user,
     )
 
     if page == "IT Assistant":
 
         render_assistant_page(
-
             framework=framework,
-
             user=user,
         )
 
@@ -868,17 +1607,21 @@ def main() -> None:
 
     elif page == "Evaluation Dashboard":
 
-        render_evaluation_page()
+        render_evaluation_page(
+            user=user
+        )
 
     elif page == "About IncidentIQ":
 
         render_about_page()
 
+    render_session_metrics()
+
     render_footer()
 
 
 # =========================================================
-# 17. APPLICATION ENTRY POINT
+# 30. APPLICATION ENTRY POINT
 # =========================================================
 
 
