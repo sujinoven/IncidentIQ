@@ -34,6 +34,14 @@ from incidentiq.rag.service import (
 
 from incidentiq.mcp.client import call_agent_tool
 
+from incidentiq.core.security import (
+    check_input_guardrails,
+)
+
+from incidentiq.core.routing import (
+    classify_request as classify_shared_request,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -1767,29 +1775,26 @@ class AgnoAgent:
 
         try:
 
-            # ---------------------------------------------
-            # Stage 1: Input security guardrails
-            # ---------------------------------------------
+            # Shared input guardrails.
 
-            guardrail_result = validate_input_guardrails(
-                request
+            guardrail_result = check_input_guardrails(
+                request.query
             )
 
             if guardrail_result is not None:
 
-                return guardrail_result
+                error_code, message = guardrail_result
 
-            # ---------------------------------------------
-            # Stage 2: Request routing
-            # ---------------------------------------------
+                return error_response(
+                    answer=message,
+                    error=error_code,
+                )
 
-            route = classify_request(
+            # Shared request routing.
+
+            route = classify_shared_request(
                 request.query
             )
-
-            # ---------------------------------------------
-            # Stage 3: Knowledge question answering
-            # ---------------------------------------------
 
             if route == "knowledge":
 
@@ -1797,19 +1802,11 @@ class AgnoAgent:
                     request
                 )
 
-            # ---------------------------------------------
-            # Stage 4: Incident investigation
-            # ---------------------------------------------
-
             if route == "incident":
 
                 return run_incident_team(
                     request
                 )
-
-            # ---------------------------------------------
-            # Stage 5: Safe ticket preparation
-            # ---------------------------------------------
 
             if route == "ticket":
 
@@ -1817,25 +1814,15 @@ class AgnoAgent:
                     request
                 )
 
-            # ---------------------------------------------
-            # Stage 6: Operational MCP tools
-            # ---------------------------------------------
-
             if route in OPERATIONAL_SCHEMAS:
 
                 return run_operational_agent(
                     request=request,
-
                     tool_name=route,
                 )
 
-            # ---------------------------------------------
-            # Stage 7: Unsupported request handling
-            # ---------------------------------------------
-
             return error_response(
                 answer="Unsupported request type.",
-
                 error="UNSUPPORTED_ROUTE",
             )
 
@@ -1846,7 +1833,6 @@ class AgnoAgent:
                     "You do not have permission "
                     "to perform this operation."
                 ),
-
                 error="ACCESS_DENIED",
             )
 
@@ -1854,7 +1840,6 @@ class AgnoAgent:
 
             logger.error(
                 "Agno execution failed: %s",
-
                 type(exc).__name__,
             )
 
@@ -1863,9 +1848,9 @@ class AgnoAgent:
                     "The request could not be completed. "
                     "Please try again or contact IT support."
                 ),
-
                 error="EXECUTION_FAILED",
             )
+
 
 
 # =========================================================

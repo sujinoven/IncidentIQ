@@ -33,7 +33,13 @@ from incidentiq.rag.service import (
     GroundedAnswer,
     format_context,
 )
+from incidentiq.core.security import (
+    check_input_guardrails,
+)
 
+from incidentiq.core.routing import (
+    classify_request as classify_shared_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1648,33 +1654,54 @@ class CrewAIAgent:
 
         try:
 
-            route = classify_request(
+            # Shared input guardrails.
+
+            guardrail_result = check_input_guardrails(
+                request.query
+            )
+
+            if guardrail_result is not None:
+
+                error_code, message = guardrail_result
+
+                return error_response(
+                    answer=message,
+                    error=error_code,
+                )
+
+            # Shared request routing.
+
+            route = classify_shared_request(
                 request.query
             )
 
             if route == "knowledge":
 
-                return run_knowledge_crew(request)
+                return run_knowledge_crew(
+                    request
+                )
 
             if route == "incident":
 
-                return run_incident_crew(request)
+                return run_incident_crew(
+                    request
+                )
 
             if route == "ticket":
 
-                return run_ticket_crew(request)
+                return run_ticket_crew(
+                    request
+                )
 
             if route in OPERATIONAL_SCHEMAS:
 
                 return run_operational_crew(
                     request=request,
-
                     tool_name=route,
                 )
 
             return error_response(
                 answer="Unsupported request type.",
-
                 error="UNSUPPORTED_ROUTE",
             )
 
@@ -1685,18 +1712,13 @@ class CrewAIAgent:
                     "You do not have permission "
                     "to perform this operation."
                 ),
-
                 error="ACCESS_DENIED",
             )
 
         except Exception as exc:
 
-            # Avoid exposing credentials, tokens
-            # or enterprise data through error messages.
-
             logger.error(
                 "CrewAI execution failed: %s",
-
                 type(exc).__name__,
             )
 
@@ -1705,9 +1727,10 @@ class CrewAIAgent:
                     "The request could not be completed. "
                     "Please try again or contact IT support."
                 ),
-
                 error="EXECUTION_FAILED",
             )
+
+
 
 
 # =========================================================
