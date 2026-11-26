@@ -7,7 +7,22 @@ from time import perf_counter  #Latency measurement
 from statistics import mean
 from datetime import datetime, timezone
 
+import logging
+import re
+from typing import Literal
 
+import streamlit as st
+
+from pydantic import (ValidationError,BaseModel,Field,ConfigDict,)
+
+from incidentiq.core.models import (
+    AgentRequest,
+    AgentResponse,
+    UserContext,
+    FrameworkName,
+)
+
+from incidentiq.mcp.client import call_tool
 # =========================================================
 # 1. DEVELOPMENT TELEMETRY CONFIGURATION
 # =========================================================
@@ -34,16 +49,7 @@ os.environ.setdefault(
 )
 
 
-import streamlit as st
 
-from pydantic import ValidationError
-
-from incidentiq.core.models import (
-    AgentRequest,
-    AgentResponse,
-    UserContext,
-    FrameworkName,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -251,6 +257,73 @@ TECHNICAL_ERRORS = {
     "INVESTIGATION_VALIDATION_FAILED",
 }
 
+# =========================================================
+# 7A. TICKET CONFIGURATION AND VALIDATION
+# =========================================================
+
+
+TICKET_SERVICES = {
+    "SVC-VPN": "Corporate VPN",
+    "SVC-IDENTITY": "Identity and Access Management",
+    "SVC-EMAIL": "Enterprise Email",
+    "SVC-PAYROLL": "Payroll",
+    "SVC-HR": "Human Resources",
+    "SVC-ENDPOINT": "Endpoint Management",
+    "SVC-WIFI": "Corporate Wi-Fi",
+    "SVC-FILES": "File Services",
+    "SVC-DEVOPS": "DevOps",
+    "SVC-MONITOR": "Infrastructure Monitoring",
+}
+
+
+TICKET_PRIORITIES = {
+    "P1": "P1 — Critical",
+    "P2": "P2 — High",
+    "P3": "P3 — Medium",
+    "P4": "P4 — Low",
+}
+
+
+class TicketFormInput(BaseModel):
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    service_id: str = Field(
+        pattern=r"^SVC-[A-Z0-9-]+$",
+    )
+
+    title: str = Field(
+        min_length=5,
+        max_length=150,
+    )
+
+    description: str = Field(
+        min_length=10,
+        max_length=1700,
+    )
+
+    priority: Literal[
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+    ] = "P3"
+
+
+def build_ticket_query(
+    ticket: TicketFormInput,
+) -> str:
+
+    return (
+        "Create ticket:\n"
+        f"Service: {ticket.service_id}\n"
+        f"Title: {ticket.title}\n"
+        f"Description: {ticket.description}\n"
+        f"Priority: {ticket.priority}"
+    )
 
 # =========================================================
 # 8. SESSION STATE INITIALIZATION
@@ -293,6 +366,17 @@ def clear_workspace() -> None:
     st.session_state.created_ticket = None
 
     st.session_state.execution_history = []
+
+    st.session_state.pop(
+        "ticket_feedback",
+        None,
+    )
+
+    for key in list(st.session_state.keys()):
+
+        if key.startswith("ticket_widget_"):
+
+            del st.session_state[key]
 
 
 def synchronize_context(
@@ -938,8 +1022,15 @@ def render_response_status(
     )
 
     if message.get(
-        "awaiting_confirmation"
+        "ticket_preview_closed"
     ):
+
+        st.info(
+            "This ticket preview is no longer pending. "
+            "Refer to Ticket Management for its current state."
+        )
+
+    elif message.get("awaiting_confirmation"):
 
         st.warning(
             "Ticket prepared. Human confirmation "
@@ -1350,72 +1441,864 @@ def render_assistant_page(
 # =========================================================
 
 
-def render_ticket_page() -> None:
+# ---------------------------------------------------------
+# 25.1 Validate pending ticket context
+# ---------------------------------------------------------
 
-    st.header(
-        "Ticket Management"
+
+def validate_pending_ticket_context(
+    pending_ticket: dict,
+    framework: FrameworkName,
+    user: UserContext,
+) -> bool:
+
+    return (
+
+        pending_ticket.get("framework")
+        == framework
+
+        and pending_ticket.get("user_id")
+        == user.user_id
+
+        and pending_ticket.get("user_role")
+        == user.role
+
+        and isinstance(
+            pending_ticket.get("confirmation_token"),
+            str,
+        )
+
+        and bool(
+            pending_ticket["confirmation_token"].strip()
+        )
     )
 
-    st.write(
-        "Prepare and review enterprise IT "
-        "support tickets."
+
+# ---------------------------------------------------------
+# 25.2 Prepare ticket using selected agent
+# ---------------------------------------------------------
+
+
+def prepare_ticket_request(
+    ticket: TicketFormInput,
+    framework: FrameworkName,
+    user: UserContext,
+) -> None:
+
+    if st.session_state.pending_ticket is not None:
+
+        st.warning(
+            "Review the existing pending ticket first."
+        )
+
+        return
+
+    query = build_ticket_query(ticket)
+
+    start_time = perf_counter()
+
+    with st.spinner(
+        f"{FRAMEWORK_LABELS[framework]} "
+        "is preparing your ticket..."
+    ):
+
+        response = execute_agent(
+            query=query,
+            framework=framework,
+            user=user,
+        )
+
+    latency = perf_counter() - start_time
+
+    record_execution(
+        response=response,
+        latency=latency,
+    )
+
+    if not response.success:
+
+        st.error(
+            "Ticket preparation failed."
+        )
+
+        st.text(response.answer)
+
+        st.caption(
+            f"Error: {response.error or 'UNKNOWN_ERROR'}"
+        )
+
+        return
+
+    token = response.pending_confirmation_token
+
+    if (
+
+        not isinstance(token, str)
+
+        or not token.strip()
+
+        or "prepare_ticket" not in response.tools_used
+
+        or not response.answer.strip()
+
+    ):
+
+        st.error(
+            "The agent did not return a valid "
+            "ticket preparation response."
+        )
+
+        return
+
+    store_pending_ticket(
+        response=response,
+        framework=framework,
+        user=user,
     )
 
     pending_ticket = (
         st.session_state.pending_ticket
     )
 
-    if pending_ticket is not None:
+    if pending_ticket is None:
 
-        st.warning(
-            "A ticket is awaiting confirmation."
+        st.error(
+            "The pending ticket could not be stored."
         )
 
-        st.subheader(
-            "Pending Ticket Preview"
+        return
+
+    # Preserve the original submitted fields separately
+    # from the backend-generated preview.
+
+    pending_ticket["submitted_details"] = (
+        ticket.model_dump()
+    )
+
+    pending_ticket["latency_seconds"] = round(
+        latency,
+        3,
+    )
+
+    pending_ticket["tools_used"] = list(
+        response.tools_used
+    )
+
+    st.session_state.created_ticket = None
+
+    st.session_state.pop(
+        "ticket_widget_approval",
+        None,
+    )
+
+    st.rerun()
+
+
+# ---------------------------------------------------------
+# 25.3 Render ticket preparation form
+# ---------------------------------------------------------
+
+
+def render_ticket_form(
+    framework: FrameworkName,
+    user: UserContext,
+) -> None:
+
+    st.subheader(
+        "Prepare a New Support Ticket"
+    )
+
+    st.caption(
+        "Ticket preparation does not create "
+        "a final support ticket."
+    )
+
+    with st.form(
+        key="ticket_widget_form",
+        clear_on_submit=False,
+    ):
+
+        service_id = st.selectbox(
+
+            "Enterprise service",
+
+            options=list(
+                TICKET_SERVICES.keys()
+            ),
+
+            format_func=lambda value: (
+                f"{value} — "
+                f"{TICKET_SERVICES[value]}"
+            ),
+
+            key="ticket_widget_service",
         )
 
-        st.text(
-            pending_ticket["preview"]
+        title = st.text_input(
+
+            "Ticket title",
+
+            placeholder=(
+                "Example: Corporate VPN connection failure"
+            ),
+
+            max_chars=150,
+
+            key="ticket_widget_title",
+        )
+
+        description = st.text_area(
+
+            "Issue description",
+
+            placeholder=(
+                "Describe the issue, symptoms "
+                "and business impact."
+            ),
+
+            height=150,
+
+            max_chars=1700,
+
+            key="ticket_widget_description",
+        )
+
+        priority = st.selectbox(
+
+            "Priority",
+
+            options=list(
+                TICKET_PRIORITIES.keys()
+            ),
+
+            index=2,
+
+            format_func=lambda value: (
+                TICKET_PRIORITIES[value]
+            ),
+
+            key="ticket_widget_priority",
         )
 
         st.caption(
-            "Requester: "
-            f"{pending_ticket['user_id']}"
+            f"Requester: {user.user_id} | "
+            f"Framework: {FRAMEWORK_LABELS[framework]}"
         )
 
-        st.info(
-            "Ticket confirmation will be enabled "
-            "in the next implementation step."
+        submitted = st.form_submit_button(
+
+            "Prepare ticket",
+
+            type="primary",
+
+            use_container_width=True,
+        )
+
+    if not submitted:
+
+        return
+
+    # Normalize whitespace because the existing
+    # agent ticket parsers expect single-line fields.
+
+    normalized_title = " ".join(
+        title.split()
+    )
+
+    normalized_description = " ".join(
+        description.split()
+    )
+
+    try:
+
+        ticket = TicketFormInput(
+
+            service_id=service_id,
+
+            title=normalized_title,
+
+            description=normalized_description,
+
+            priority=priority,
+        )
+
+    except ValidationError as exc:
+
+        st.error(
+            "Please correct the ticket details."
+        )
+
+        for error in exc.errors():
+
+            field = ".".join(
+                str(part)
+                for part in error["loc"]
+            )
+
+            st.text(
+                f"{field}: {error['msg']}"
+            )
+
+        return
+
+    if ticket.service_id not in TICKET_SERVICES:
+
+        st.error(
+            "Invalid enterprise service."
+        )
+
+        return
+
+    if len(build_ticket_query(ticket)) > 2000:
+
+        st.error(
+            "The complete ticket request is too long."
+        )
+
+        return
+
+    prepare_ticket_request(
+        ticket=ticket,
+        framework=framework,
+        user=user,
+    )
+
+
+# ---------------------------------------------------------
+# 25.4 Update historical pending-ticket indicators
+# ---------------------------------------------------------
+
+
+def clear_pending_ticket_indicators() -> None:
+
+    for message in st.session_state.messages:
+
+        if message.get("awaiting_confirmation"):
+
+            message["awaiting_confirmation"] = False
+
+            message["ticket_preview_closed"] = True
+
+
+# ---------------------------------------------------------
+# 25.5 Cancel pending ticket
+# ---------------------------------------------------------
+
+
+def cancel_pending_ticket() -> None:
+
+    st.session_state.pending_ticket = None
+
+    clear_pending_ticket_indicators()
+
+    st.session_state.ticket_feedback = (
+        "Pending preview discarded. "
+        "No creation request was submitted by this action."
+    )
+
+    st.rerun()
+
+
+# ---------------------------------------------------------
+# 25.6 Confirm and create ticket
+# ---------------------------------------------------------
+
+
+def confirm_pending_ticket(
+    framework: FrameworkName,
+    user: UserContext,
+    approved: bool,
+) -> None:
+
+    if not approved:
+
+        st.warning(
+            "Explicit approval is required."
+        )
+
+        return
+
+    pending_ticket = (
+        st.session_state.pending_ticket
+    )
+
+    if pending_ticket is None:
+
+        st.warning(
+            "No pending ticket is available."
+        )
+
+        return
+
+    if not validate_pending_ticket_context(
+
+        pending_ticket=pending_ticket,
+
+        framework=framework,
+
+        user=user,
+
+    ):
+
+        st.error(
+            "The pending ticket does not match "
+            "the current user context."
+        )
+
+        return
+
+    confirmation_token = (
+        pending_ticket["confirmation_token"]
+    )
+
+    start_time = perf_counter()
+
+    try:
+
+        with st.spinner(
+            "Submitting approved ticket..."
+        ):
+
+            # This is intentionally NOT call_agent_tool().
+            # Final creation is a user-approved operation.
+
+            result = call_tool(
+
+                tool_name="create_ticket",
+
+                arguments={
+                    "confirmation_token": confirmation_token,
+                },
+
+                user=user,
+            )
+
+    except Exception as exc:
+
+        logger.error(
+            "Ticket confirmation failed: %s",
+            type(exc).__name__,
+        )
+
+        st.error(
+            "Ticket creation could not be verified. "
+            "The request may have reached the backend. "
+            "Do not prepare a replacement ticket yet."
+        )
+
+        return
+
+    latency = perf_counter() - start_time
+
+    if not isinstance(result, dict):
+
+        st.error(
+            "The ticket creation response "
+            "could not be verified."
+        )
+
+        return
+
+    if (
+
+        result.get("error")
+
+        or result.get("success") is False
+
+    ):
+
+        st.error(
+            "The backend rejected ticket creation. "
+            "The token may be invalid or expired."
+        )
+
+        return
+
+    # Support a ticket ID returned either at the
+    # top level or inside a ticket record.
+
+    ticket_record = result.get("ticket")
+
+    if not isinstance(ticket_record, dict):
+
+        ticket_record = {}
+
+    ticket_id = (
+
+        result.get("ticket_id")
+
+        or ticket_record.get("ticket_id")
+    )
+
+    status = result.get("status")
+
+    if (
+
+        not isinstance(ticket_id, str)
+
+        or not re.fullmatch(
+            r"TKT-(?:\d{4}|[A-F0-9]{12})",
+            ticket_id,
+        )
+
+        or status not in {
+            "created",
+            "already_created",
+        }
+
+    ):
+
+        st.error(
+            "The backend response does not match "
+            "the expected ticket creation format. "
+            "Creation has not been verified."
+        )
+
+        return
+
+    returned_requester = (
+
+        ticket_record.get("requester_id")
+
+        or result.get("requester_id")
+    )
+
+    if (
+
+        returned_requester is not None
+
+        and returned_requester != user.user_id
+
+    ):
+
+        st.error(
+            "The returned ticket requester "
+            "could not be verified."
+        )
+
+        return
+
+    # Store only the required receipt fields.
+    # Never store the entire raw response or token.
+
+    st.session_state.created_ticket = {
+
+        "ticket_id": ticket_id,
+
+        "status": status,
+
+        "requester_id": user.user_id,
+
+        "framework": framework,
+
+        "latency_seconds": round(
+            latency,
+            3,
+        ),
+
+        "recorded_at": datetime.now(
+            timezone.utc
+        ).isoformat(),
+    }
+
+    st.session_state.pending_ticket = None
+
+    clear_pending_ticket_indicators()
+
+    st.rerun()
+
+
+# ---------------------------------------------------------
+# 25.7 Render pending ticket preview
+# ---------------------------------------------------------
+
+
+def render_pending_ticket(
+    framework: FrameworkName,
+    user: UserContext,
+) -> None:
+
+    pending_ticket = (
+        st.session_state.pending_ticket
+    )
+
+    if pending_ticket is None:
+
+        return
+
+    st.subheader(
+        "Review and Confirm"
+    )
+
+    if not validate_pending_ticket_context(
+
+        pending_ticket=pending_ticket,
+
+        framework=framework,
+
+        user=user,
+
+    ):
+
+        st.error(
+            "Ticket confirmation is unavailable "
+            "for the current user context."
         )
 
         if st.button(
-            "Discard pending preview",
-            type="secondary",
+            "Discard preview",
+            key="ticket_widget_invalid_discard",
         ):
 
-            st.session_state.pending_ticket = None
+            cancel_pending_ticket()
 
-            st.rerun()
+        return
+
+    st.warning(
+        "Awaiting human confirmation"
+    )
+
+    submitted_details = pending_ticket.get(
+        "submitted_details"
+    )
+
+    if submitted_details:
+
+        with st.expander(
+            "Original submitted details"
+        ):
+
+            st.text(
+                f"Service: {submitted_details['service_id']}"
+            )
+
+            st.text(
+                f"Title: {submitted_details['title']}"
+            )
+
+            st.text(
+                f"Description: "
+                f"{submitted_details['description']}"
+            )
+
+            st.text(
+                f"Priority: {submitted_details['priority']}"
+            )
+
+    st.markdown(
+        "**Prepared ticket preview**"
+    )
+
+    preview = pending_ticket["preview"]
+
+    # Defensive redaction of the confirmation token.
+
+    preview = preview.replace(
+        pending_ticket["confirmation_token"],
+        "[REDACTED]",
+    )
+
+    st.text(preview)
+
+    st.caption(
+        f"Requester: {pending_ticket['user_id']} | "
+        f"Framework: {FRAMEWORK_LABELS[framework]}"
+    )
+
+    st.caption(
+        f"Prepared at: {pending_ticket['prepared_at']}"
+    )
+
+    if "latency_seconds" in pending_ticket:
 
         st.caption(
-            "Discarding the preview clears the "
-            "local session only. The backend "
-            "preparation record expires separately."
+            "Preparation latency: "
+            f"{pending_ticket['latency_seconds']:.3f}s"
         )
+
+    st.info(
+        "Review the prepared ticket carefully. "
+        "The preparation token expires on the backend."
+    )
+
+    approved = st.checkbox(
+
+        "I have reviewed the prepared ticket "
+        "and authorize its creation.",
+
+        key="ticket_widget_approval",
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        if st.button(
+
+            "Confirm and create",
+
+            type="primary",
+
+            disabled=not approved,
+
+            use_container_width=True,
+
+            key="ticket_widget_confirm",
+
+        ):
+
+            confirm_pending_ticket(
+                framework=framework,
+                user=user,
+                approved=approved,
+            )
+
+    with col2:
+
+        if st.button(
+
+            "Cancel",
+
+            type="secondary",
+
+            use_container_width=True,
+
+            key="ticket_widget_cancel",
+
+        ):
+
+            cancel_pending_ticket()
+
+    st.caption(
+        "Cancellation discards the local preview. "
+        "The backend token expires separately."
+    )
+
+
+# ---------------------------------------------------------
+# 25.8 Render successful ticket receipt
+# ---------------------------------------------------------
+
+
+def render_created_ticket() -> None:
+
+    receipt = st.session_state.created_ticket
+
+    if receipt is None:
+
+        return
+
+    st.success(
+        "Ticket creation verified."
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        st.metric(
+            "Ticket ID",
+            receipt["ticket_id"],
+        )
+
+    with col2:
+
+        st.metric(
+            "Creation latency",
+            f"{receipt['latency_seconds']:.2f}s",
+        )
+
+    st.text(
+        f"Requester: {receipt['requester_id']}"
+    )
+
+    st.text(
+        f"Creation result: {receipt['status']}"
+    )
+
+    st.text(
+        f"Preparation framework: "
+        f"{FRAMEWORK_LABELS[receipt['framework']]}"
+    )
+
+    st.caption(
+        f"Recorded at: {receipt['recorded_at']}"
+    )
+
+    if st.button(
+
+        "Prepare another ticket",
+
+        type="primary",
+
+        key="ticket_widget_another",
+
+    ):
+
+        st.session_state.created_ticket = None
+
+        for key in list(st.session_state.keys()):
+
+            if key.startswith("ticket_widget_"):
+
+                del st.session_state[key]
+
+        st.rerun()
+
+
+# ---------------------------------------------------------
+# 25.9 Main ticket management page
+# ---------------------------------------------------------
+
+
+def render_ticket_page(
+    framework: FrameworkName,
+    user: UserContext,
+) -> None:
+
+    st.header(
+        "Ticket Management"
+    )
+
+    st.caption(
+        "Prepare, review and explicitly approve "
+        "enterprise IT support tickets."
+    )
+
+    feedback = st.session_state.pop(
+        "ticket_feedback",
+        None,
+    )
+
+    if feedback:
+
+        st.info(feedback)
+
+    pending_ticket = (
+        st.session_state.pending_ticket
+    )
+
+    created_ticket = (
+        st.session_state.created_ticket
+    )
+
+    if pending_ticket is not None:
+
+        render_pending_ticket(
+            framework=framework,
+            user=user,
+        )
+
+    elif created_ticket is not None:
+
+        render_created_ticket()
 
     else:
 
-        st.info(
-            "No ticket is currently awaiting "
-            "confirmation."
+        render_ticket_form(
+            framework=framework,
+            user=user,
         )
-
-        st.write(
-            "The dedicated ticket preparation "
-            "form will be added in Module 11.3."
-        )
-
 
 # =========================================================
 # 26. EVALUATION DASHBOARD PAGE
@@ -1603,7 +2486,10 @@ def main() -> None:
 
     elif page == "Ticket Management":
 
-        render_ticket_page()
+        render_ticket_page(
+        framework=framework,
+        user=user,
+    )
 
     elif page == "Evaluation Dashboard":
 
