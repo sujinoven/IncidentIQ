@@ -99,6 +99,31 @@ class TicketLookupInput(BaseModel):
         pattern=r"^TKT-(?:\d{4}|[A-F0-9]{12})$"
     )
 
+#Before sending ticket information to our MCP server, we validate every field.
+class TicketPreparationInput(BaseModel):
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    service_id: str = Field(
+        pattern=r"^SVC-[A-Z0-9-]+$"
+    )
+
+    title: str = Field(
+        min_length=5,
+        max_length=150,
+    )
+
+    description: str = Field(
+        min_length=10,
+        max_length=2000,
+    )
+
+    priority: Literal[
+        "P1", "P2", "P3", "P4"
+    ] = "P3"
 
 # =========================================================
 # 3. MCP TOOL CONFIGURATION
@@ -1220,6 +1245,390 @@ def run_operational_agent(
         success=True,
     )
 
+# =========================================================
+# INPUT SECURITY GUARDRAILS
+# =========================================================
+
+
+RESTRICTED_ACTION_PATTERNS = (
+    r"^(?:please\s+)?(?:delete|remove|purge)\s+"
+    r"(?:(?:all|the|a|an)\s+)?"
+    r"(?:tickets?|incidents?|assets?|records?|logs?|databases?)\b",
+
+    r"^(?:please\s+)?(?:restart|shutdown|shut down|reboot)\s+"
+    r"(?:(?:the|all|a)\s+)?"
+    r"(?:servers?|services?|production systems?)\b",
+
+    r"^(?:please\s+)?(?:disable|bypass|turn off)\s+"
+    r"(?:(?:the|all)\s+)?"
+    r"(?:mfa|authentication|rbac|access controls?|security controls?)\b",
+
+    r"^(?:please\s+)?(?:grant|assign|elevate)\s+"
+    r".*\b(?:admin|administrator|root)\b",
+
+    r"^(?:please\s+)?(?:reveal|show|export|dump)\s+"
+    r"(?:(?:all|the|your|system)\s+)*"
+    r"(?:passwords?|api keys?|credentials?|secrets?|system prompts?)\b",
+
+    r"^(?:please\s+)?(?:close|resolve|update|modify)\s+"
+    r"(?:(?:the|a|an)\s+)?"
+    r"(?:tickets?|incidents?|TKT-|INC-)",
+
+    r"^(?:please\s+)?(?:confirm|execute)\s+"
+    r".*\bticket\b",
+)
+
+
+def validate_input_guardrails(
+    request: AgentRequest,
+) -> AgentResponse | None:
+
+    query = request.query.strip()
+
+    if not query:
+
+        return error_response(
+            answer="Please provide a valid IT support request.",
+            error="INVALID_INPUT",
+        )
+
+    if len(query) > 2000:
+
+        return error_response(
+            answer="The request exceeds the allowed length.",
+            error="INVALID_INPUT",
+        )
+
+    # Reject unexpected control characters.
+    # Preserve normal multiline ticket input.
+
+    if any(
+        ord(character) < 32
+        and character not in "\n\r\t"
+        for character in query
+    ):
+
+        return error_response(
+            answer="The request contains invalid characters.",
+            error="INVALID_INPUT",
+        )
+
+    normalized_query = " ".join(
+        query.lower().split()
+    )
+
+    for pattern in RESTRICTED_ACTION_PATTERNS:
+
+        if re.search(
+            pattern,
+            normalized_query,
+            flags=re.IGNORECASE,
+        ):
+
+            return error_response(
+                answer=(
+                    "This operation is not supported by "
+                    "IncidentIQ. Please contact an authorized "
+                    "IT administrator or use the approved "
+                    "enterprise workflow."
+                ),
+
+                error="RESTRICTED_ACTION",
+            )
+
+    return None
+
+
+#Implementing safe ticket preparation
+
+# =========================================================
+# SAFE TICKET PREPARATION WORKFLOW
+# =========================================================
+
+
+def run_ticket_team(
+    request: AgentRequest,
+) -> AgentResponse:
+
+    if request.framework != "agno":
+
+        raise ValueError(
+            "Expected framework='agno'."
+        )
+
+    # -----------------------------------------------------
+    # Stage 1: Extract explicitly supplied ticket fields
+    # -----------------------------------------------------
+
+    field_mapping = {
+        "service": "service_id",
+        "title": "title",
+        "description": "description",
+        "priority": "priority",
+    }
+
+    fields = {}
+
+    for line in request.query.splitlines():
+
+        line = line.strip()
+
+        if not line:
+            continue
+
+        if re.fullmatch(
+            r"(?:please\s+)?"
+            r"(?:create|open|raise|submit)\s+"
+            r"(?:(?:a|an|new|support|it)\s+)*"
+            r"ticket:?",
+            line,
+            flags=re.IGNORECASE,
+        ):
+
+            continue
+
+        if ":" not in line:
+
+            return error_response(
+                answer=(
+                    "Please provide ticket details "
+                    "using the supported field format."
+                ),
+
+                error="INVALID_TICKET_DETAILS",
+            )
+
+        key, value = line.split(":", 1)
+
+        key = key.strip().lower()
+
+        value = value.strip()
+
+        if key not in field_mapping:
+
+            return error_response(
+                answer="An unsupported ticket field was supplied.",
+
+                error="INVALID_TICKET_DETAILS",
+            )
+
+        target = field_mapping[key]
+
+        if target in fields:
+
+            return error_response(
+                answer="Duplicate ticket fields detected.",
+
+                error="DUPLICATE_TICKET_FIELDS",
+            )
+
+        fields[target] = value
+
+    # -----------------------------------------------------
+    # Stage 2: Validate ticket input
+    # -----------------------------------------------------
+
+    try:
+
+        ticket = TicketPreparationInput.model_validate(
+            fields
+        )
+
+    except ValidationError:
+
+        return error_response(
+            answer=(
+                "Please provide valid ticket details:\n\n"
+
+                "Create ticket:\n"
+
+                "Service: SVC-VPN\n"
+
+                "Title: VPN connection failure\n"
+
+                "Description: VPN disconnects repeatedly\n"
+
+                "Priority: P3"
+            ),
+
+            error="INVALID_TICKET_DETAILS",
+        )
+
+    # -----------------------------------------------------
+    # Stage 3: Call the approved MCP preparation tool
+    # -----------------------------------------------------
+
+    try:
+
+        result = call_agent_tool(
+            tool_name="prepare_ticket",
+
+            arguments=ticket.model_dump(),
+
+            user=request.user,
+        )
+
+    except PermissionError:
+
+        return error_response(
+            answer=(
+                "You do not have permission "
+                "to prepare this ticket."
+            ),
+
+            error="ACCESS_DENIED",
+
+            tools_used=["prepare_ticket"],
+        )
+
+    except Exception as exc:
+
+        logger.warning(
+            "Agno ticket preparation failed: %s",
+
+            type(exc).__name__,
+        )
+
+        return error_response(
+            answer="The ticket could not be prepared.",
+
+            error="TICKET_PREPARATION_FAILED",
+
+            tools_used=["prepare_ticket"],
+        )
+
+    # -----------------------------------------------------
+    # Stage 4: Validate MCP response
+    # -----------------------------------------------------
+
+    if not isinstance(result, dict):
+
+        return error_response(
+            answer="Invalid ticket preparation response.",
+
+            error="INVALID_TICKET_PREVIEW",
+
+            tools_used=["prepare_ticket"],
+        )
+
+    if result.get("status") != "awaiting_confirmation":
+
+        return error_response(
+            answer="Ticket preparation could not be verified.",
+
+            error="INVALID_TICKET_PREVIEW",
+
+            tools_used=["prepare_ticket"],
+        )
+
+    confirmation_token = result.get(
+        "confirmation_token"
+    )
+
+    preview = result.get("preview")
+
+    if (
+        not isinstance(confirmation_token, str)
+
+        or not confirmation_token.strip()
+
+        or not isinstance(preview, dict)
+    ):
+
+        return error_response(
+            answer="The ticket preview is invalid.",
+
+            error="INVALID_TICKET_PREVIEW",
+
+            tools_used=["prepare_ticket"],
+        )
+
+    required_fields = {
+        "service_id",
+        "title",
+        "description",
+        "priority",
+        "requester_id",
+    }
+
+    if not required_fields.issubset(preview):
+
+        return error_response(
+            answer="The ticket preview is incomplete.",
+
+            error="INVALID_TICKET_PREVIEW",
+
+            tools_used=["prepare_ticket"],
+        )
+
+    # -----------------------------------------------------
+    # Stage 5: Verify requester identity
+    # -----------------------------------------------------
+
+    if preview["requester_id"] != request.user.user_id:
+
+        return error_response(
+            answer="The ticket requester could not be verified.",
+
+            error="INVALID_TICKET_PREVIEW",
+
+            tools_used=["prepare_ticket"],
+        )
+
+    # -----------------------------------------------------
+    # Stage 6: Verify the preview matches validated input
+    # -----------------------------------------------------
+
+    expected_fields = ticket.model_dump()
+
+    for field, expected_value in expected_fields.items():
+
+        if preview.get(field) != expected_value:
+
+            return error_response(
+                answer=(
+                    "The ticket preview does not match "
+                    "the submitted details."
+                ),
+
+                error="INVALID_TICKET_PREVIEW",
+
+                tools_used=["prepare_ticket"],
+            )
+
+    # -----------------------------------------------------
+    # Stage 7: Return human confirmation checkpoint
+    # -----------------------------------------------------
+
+    answer = (
+        "Please review the proposed ticket:\n\n"
+
+        f"Service: {preview['service_id']}\n"
+
+        f"Title: {preview['title']}\n"
+
+        f"Description: {preview['description']}\n"
+
+        f"Priority: {preview['priority']}\n"
+
+        f"Requester: {preview['requester_id']}\n\n"
+
+        "Status: Awaiting confirmation.\n"
+
+        "No ticket has been created."
+    )
+
+    return AgentResponse(
+        answer=answer,
+
+        framework="agno",
+
+        tools_used=["prepare_ticket"],
+
+        pending_confirmation_token=confirmation_token,
+
+        success=True,
+    )
 
 # =========================================================
 # 19. REQUEST ROUTING
@@ -1337,6 +1746,7 @@ def classify_request(
     return "knowledge"
 
 
+
 # =========================================================
 # 20. UNIFIED AGNO FRAMEWORK ADAPTER
 # =========================================================
@@ -1357,9 +1767,29 @@ class AgnoAgent:
 
         try:
 
+            # ---------------------------------------------
+            # Stage 1: Input security guardrails
+            # ---------------------------------------------
+
+            guardrail_result = validate_input_guardrails(
+                request
+            )
+
+            if guardrail_result is not None:
+
+                return guardrail_result
+
+            # ---------------------------------------------
+            # Stage 2: Request routing
+            # ---------------------------------------------
+
             route = classify_request(
                 request.query
             )
+
+            # ---------------------------------------------
+            # Stage 3: Knowledge question answering
+            # ---------------------------------------------
 
             if route == "knowledge":
 
@@ -1367,22 +1797,29 @@ class AgnoAgent:
                     request
                 )
 
+            # ---------------------------------------------
+            # Stage 4: Incident investigation
+            # ---------------------------------------------
+
             if route == "incident":
 
                 return run_incident_team(
                     request
                 )
 
+            # ---------------------------------------------
+            # Stage 5: Safe ticket preparation
+            # ---------------------------------------------
+
             if route == "ticket":
 
-                return error_response(
-                    answer=(
-                        "Ticket preparation is not "
-                        "enabled in this implementation yet."
-                    ),
-
-                    error="TICKET_NOT_IMPLEMENTED",
+                return run_ticket_team(
+                    request
                 )
+
+            # ---------------------------------------------
+            # Stage 6: Operational MCP tools
+            # ---------------------------------------------
 
             if route in OPERATIONAL_SCHEMAS:
 
@@ -1391,6 +1828,10 @@ class AgnoAgent:
 
                     tool_name=route,
                 )
+
+            # ---------------------------------------------
+            # Stage 7: Unsupported request handling
+            # ---------------------------------------------
 
             return error_response(
                 answer="Unsupported request type.",
