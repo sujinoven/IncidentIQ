@@ -57,6 +57,9 @@ EVALUATION_USERS = {
 EVALUATION_METRICS = [
     "mcp_tool_accuracy",
     "citation_accuracy",
+    "citation_precision",
+    "citation_recall",
+    "citation_f1",
     "restricted_text_check",
     "behavior_compliance",
     "answer_relevance",
@@ -315,35 +318,46 @@ def evaluate_citations(
 ) -> dict:
 
     expected = set(expected_ids)
-
     actual = set(actual_ids)
 
     matched = expected & actual
-
     missing = expected - actual
-
     unexpected = actual - expected
 
-    exact_match = int(
-        expected == actual
-    )
+    exact_match = int(expected == actual)
 
-    precision = (
-        len(matched) / len(actual)
-        if actual
-        else float(not expected)
-    )
+    # Both citation sets are empty.
+    if not expected and not actual:
 
-    recall = (
-        len(matched) / len(expected)
-        if expected
-        else 1.0
-    )
+        precision = 1.0
+        recall = 1.0
+        f1 = 1.0
+
+    # Only one citation set is empty.
+    elif not expected or not actual:
+
+        precision = 0.0
+        recall = 0.0
+        f1 = 0.0
+
+    else:
+
+        precision = len(matched) / len(actual)
+
+        recall = len(matched) / len(expected)
+
+        f1 = (
+            2 * precision * recall
+            / (precision + recall)
+            if precision + recall > 0
+            else 0.0
+        )
 
     return {
         "score": exact_match,
         "precision": round(precision, 4),
         "recall": round(recall, 4),
+        "f1": round(f1, 4),
         "matched": sorted(matched),
         "missing": sorted(missing),
         "unexpected": sorted(unexpected),
@@ -566,7 +580,7 @@ def tool_evaluator(
 
 
 # =========================================================
-# 7. CITATION ACCURACY EVALUATOR
+# 7. CITATION EVALUATORS
 # =========================================================
 
 
@@ -590,23 +604,79 @@ def citation_evaluator(
         actual_ids=actual_ids,
     )
 
+    # Technical failures must not receive
+    # positive citation scores.
+
     if outputs.get("execution_failed"):
 
         result["score"] = 0
+        result["precision"] = 0.0
+        result["recall"] = 0.0
+        result["f1"] = 0.0
 
         result["execution_failed"] = True
 
     return {
         "key": "citation_accuracy",
-
         "score": result["score"],
-
         "comment": json.dumps(
             result,
             ensure_ascii=False,
         ),
     }
 
+
+def citation_quality_evaluator(
+    outputs: dict,
+    reference_outputs: dict,
+) -> list[dict]:
+
+    expected_ids = reference_outputs.get(
+        "expected_document_ids",
+        [],
+    )
+
+    actual_ids = outputs.get(
+        "document_ids",
+        [],
+    )
+
+    result = evaluate_citations(
+        expected_ids=expected_ids,
+        actual_ids=actual_ids,
+    )
+
+    if outputs.get("execution_failed"):
+
+        result["score"] = 0
+        result["precision"] = 0.0
+        result["recall"] = 0.0
+        result["f1"] = 0.0
+
+        result["execution_failed"] = True
+
+    comment = json.dumps(
+        result,
+        ensure_ascii=False,
+    )
+
+    return [
+        {
+            "key": "citation_precision",
+            "score": result["precision"],
+            "comment": comment,
+        },
+        {
+            "key": "citation_recall",
+            "score": result["recall"],
+            "comment": comment,
+        },
+        {
+            "key": "citation_f1",
+            "score": result["f1"],
+            "comment": comment,
+        },
+    ]
 
 # =========================================================
 # 8. RESTRICTED INFORMATION EVALUATOR
@@ -1263,18 +1333,14 @@ def run_experiment(
         data=examples,
 
         evaluators=[
-            tool_evaluator,
-
-            citation_evaluator,
-
-            disclosure_evaluator,
-
-            behavior_evaluator,
-
-            execution_evaluator,
-
-            latency_evaluator,
-        ],
+    tool_evaluator,
+    citation_evaluator,
+    citation_quality_evaluator,
+    disclosure_evaluator,
+    behavior_evaluator,
+    execution_evaluator,
+    latency_evaluator,
+],
 
         experiment_prefix=experiment_prefix,
 
@@ -1717,32 +1783,34 @@ def run_local_experiment(
 
             evaluations = [
 
-                tool_evaluator(
-                    outputs=outputs,
+            tool_evaluator(
+                outputs=outputs,
+                reference_outputs=reference_outputs,
+            ),
 
-                    reference_outputs=reference_outputs,
-                ),
+            citation_evaluator(
+                outputs=outputs,
+                reference_outputs=reference_outputs,
+            ),
 
-                citation_evaluator(
-                    outputs=outputs,
+            *citation_quality_evaluator(
+                outputs=outputs,
+                reference_outputs=reference_outputs,
+            ),
 
-                    reference_outputs=reference_outputs,
-                ),
+            disclosure_evaluator(
+                outputs=outputs,
+                reference_outputs=reference_outputs,
+            ),
 
-                disclosure_evaluator(
-                    outputs=outputs,
+            execution_evaluator(
+                outputs=outputs,
+            ),
 
-                    reference_outputs=reference_outputs,
-                ),
-
-                execution_evaluator(
-                    outputs=outputs,
-                ),
-
-                latency_evaluator(
-                    outputs=outputs,
-                ),
-            ]
+            latency_evaluator(
+                outputs=outputs,
+            ),
+        ]
 
             # ---------------------------------------------
             # Execute LLM judge
