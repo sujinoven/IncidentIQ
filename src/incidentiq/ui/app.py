@@ -23,6 +23,10 @@ from incidentiq.core.models import (
 )
 
 from incidentiq.mcp.client import call_tool
+
+import json
+import math
+import pandas as pd
 # =========================================================
 # 1. DEVELOPMENT TELEMETRY CONFIGURATION
 # =========================================================
@@ -2305,78 +2309,895 @@ def render_ticket_page(
 # =========================================================
 
 
-def render_evaluation_page(
-    user: UserContext,
-) -> None:
+EVALUATION_METRIC_LABELS = {
+    "mcp_tool_accuracy": "MCP Tool Accuracy",
+    "citation_accuracy": "Citation Accuracy",
+    "restricted_text_check": "Restricted Text Check",
+    "behavior_compliance": "Behavior Compliance",
+    "answer_relevance": "Answer Relevance",
+    "execution_reliability": "Execution Reliability",
+    "latency_seconds": "Average Latency",
+}
 
-    st.header(
-        "Framework Evaluation Dashboard"
+
+# ---------------------------------------------------------
+# 26.1 Discover evaluation reports
+# ---------------------------------------------------------
+
+
+def discover_evaluation_reports() -> list[Path]:
+
+    if not EVALUATION_DIR.exists():
+        return []
+
+    return sorted(
+        [
+            path
+            for path in EVALUATION_DIR.glob(
+                "comparison_*.json"
+            )
+            if path.is_file()
+        ],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
     )
 
-    # Evaluation reports can contain privileged
-    # enterprise test queries and answers.
 
-    if user.role != "it_admin":
+# ---------------------------------------------------------
+# 26.2 Load and validate comparison report
+# ---------------------------------------------------------
 
-        st.warning(
-            "The evaluation dashboard is "
-            "restricted to IT administrators."
+
+def load_evaluation_report(
+    report_path: Path,
+) -> dict:
+
+    report_path = report_path.resolve()
+
+    if report_path.parent != EVALUATION_DIR.resolve():
+
+        raise ValueError(
+            "Invalid evaluation report location."
+        )
+
+    with report_path.open(
+        "r",
+        encoding="utf-8",
+    ) as file:
+
+        report = json.load(file)
+
+    if not isinstance(report, dict):
+
+        raise ValueError(
+            "Invalid evaluation report format."
+        )
+
+    required_fields = {
+        "frameworks",
+        "split",
+        "agent_model",
+        "judge_model",
+        "generated_at",
+        "cases_per_framework",
+        "total_framework_executions",
+        "case_ids",
+        "summary",
+        "common_case_summary",
+        "framework_reports",
+    }
+
+    missing_fields = (
+        required_fields - set(report)
+    )
+
+    if missing_fields:
+
+        raise ValueError(
+            "Required report fields are missing."
+        )
+
+    frameworks = report["frameworks"]
+
+    if (
+        not isinstance(frameworks, list)
+        or not frameworks
+        or not all(
+            isinstance(framework, str)
+            and framework in FRAMEWORK_LABELS
+            for framework in frameworks
+        )
+    ):
+
+        raise ValueError(
+            "Invalid framework configuration."
+        )
+
+    if len(frameworks) != len(set(frameworks)):
+
+        raise ValueError(
+            "Duplicate frameworks in report."
+        )
+
+    total_cases = report["cases_per_framework"]
+
+    if type(total_cases) is not int or total_cases < 1:
+
+        raise ValueError(
+            "Invalid evaluation case count."
+        )
+
+    if (
+        report["total_framework_executions"]
+        != total_cases * len(frameworks)
+    ):
+
+        raise ValueError(
+            "Inconsistent execution count."
+        )
+
+    case_ids = report["case_ids"]
+
+    if (
+        not isinstance(case_ids, list)
+        or not all(
+            isinstance(case_id, str)
+            for case_id in case_ids
+        )
+        or len(case_ids) != total_cases
+        or len(set(case_ids)) != total_cases
+    ):
+
+        raise ValueError(
+            "Invalid evaluation case IDs."
+        )
+
+    if not isinstance(
+        report["framework_reports"],
+        dict,
+    ):
+
+        raise ValueError(
+            "Invalid framework reports."
+        )
+
+    for framework in frameworks:
+
+        framework_report = report[
+            "framework_reports"
+        ].get(framework)
+
+        if not isinstance(framework_report, dict):
+
+            raise ValueError(
+                "Missing framework report."
+            )
+
+        if framework_report.get("case_ids") != case_ids:
+
+            raise ValueError(
+                "Framework case IDs do not match."
+            )
+
+    # Validate both comparison modes.
+
+    for summary_key in (
+        "summary",
+        "common_case_summary",
+    ):
+
+        summary = report[summary_key]
+
+        if not isinstance(summary, dict):
+
+            raise ValueError(
+                "Invalid metric summary."
+            )
+
+        for metric in EVALUATION_METRIC_LABELS:
+
+            metric_values = summary.get(metric)
+
+            if not isinstance(metric_values, dict):
+
+                raise ValueError(
+                    "Missing evaluation metric."
+                )
+
+            coverage_counts = []
+
+            for framework in frameworks:
+
+                values = metric_values.get(framework)
+
+                if not isinstance(values, dict):
+
+                    raise ValueError(
+                        "Missing framework metric."
+                    )
+
+                if not {
+                    "average",
+                    "scored_cases",
+                    "total_cases",
+                }.issubset(values):
+
+                    raise ValueError(
+                        "Incomplete metric values."
+                    )
+
+                average = values["average"]
+                scored = values["scored_cases"]
+                total = values["total_cases"]
+
+                if (
+                    type(scored) is not int
+                    or type(total) is not int
+                    or not 0 <= scored <= total
+                    or total != total_cases
+                ):
+
+                    raise ValueError(
+                        "Invalid metric coverage."
+                    )
+
+                if (average is None) != (scored == 0):
+
+                    raise ValueError(
+                        "Inconsistent metric average."
+                    )
+
+                if average is not None:
+
+                    if (
+                        type(average) not in (int, float)
+                        or not math.isfinite(average)
+                        or average < 0
+                    ):
+
+                        raise ValueError(
+                            "Invalid metric average."
+                        )
+
+                    if (
+                        metric != "latency_seconds"
+                        and average > 1
+                    ):
+
+                        raise ValueError(
+                            "Metric score exceeds range."
+                        )
+
+                coverage_counts.append(scored)
+
+            if (
+                summary_key == "common_case_summary"
+                and len(set(coverage_counts)) != 1
+            ):
+
+                raise ValueError(
+                    "Inconsistent common-case coverage."
+                )
+
+    return report
+
+
+# ---------------------------------------------------------
+# 26.3 Normalize evaluation metrics
+# ---------------------------------------------------------
+
+
+def normalize_evaluation_metrics(
+    report: dict,
+    summary_key: str,
+) -> pd.DataFrame:
+
+    rows = []
+
+    summary = report[summary_key]
+
+    for metric, label in EVALUATION_METRIC_LABELS.items():
+
+        for framework in report["frameworks"]:
+
+            values = summary[metric][framework]
+
+            average = values["average"]
+
+            scored_cases = values["scored_cases"]
+
+            total_cases = values["total_cases"]
+
+            if average is None:
+
+                display_value = "N/A"
+
+            elif metric == "latency_seconds":
+
+                display_value = f"{average:.3f}s"
+
+            else:
+
+                display_value = f"{average * 100:.2f}%"
+
+            rows.append({
+                "Metric Key": metric,
+
+                "Metric": label,
+
+                "Framework": FRAMEWORK_LABELS[
+                    framework
+                ],
+
+                "Average": average,
+
+                "Display Value": display_value,
+
+                "Scored Cases": scored_cases,
+
+                "Total Cases": total_cases,
+
+                "Coverage": (
+                    scored_cases / total_cases
+                    if total_cases
+                    else 0.0
+                ),
+            })
+
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------
+# 26.4 Render experiment metadata
+# ---------------------------------------------------------
+
+
+def render_experiment_metadata(
+    report: dict,
+) -> None:
+
+    st.subheader("Experiment Overview")
+
+    columns = st.columns(4)
+
+    columns[0].metric(
+        "Frameworks",
+        len(report["frameworks"]),
+    )
+
+    columns[1].metric(
+        "Cases per Framework",
+        report["cases_per_framework"],
+    )
+
+    columns[2].metric(
+        "Total Executions",
+        report["total_framework_executions"],
+    )
+
+    columns[3].metric(
+        "Dataset Split",
+        str(report["split"]).upper(),
+    )
+
+    with st.expander(
+        "Experiment Configuration"
+    ):
+
+        st.text(
+            f"Agent model: {report['agent_model']}"
+        )
+
+        st.text(
+            f"Judge model: {report['judge_model']}"
+        )
+
+        st.text(
+            f"Generated at: {report['generated_at']}"
+        )
+
+        duration = report.get(
+            "comparison_duration_seconds"
+        )
+
+        if type(duration) in (int, float):
+
+            st.text(
+                f"Experiment duration: {duration:.3f}s"
+            )
+
+        ticket_preparation = report.get(
+            "allow_ticket_preparation"
+        )
+
+        st.text(
+            "Ticket preparation: "
+            + (
+                "Enabled"
+                if ticket_preparation is True
+                else "Disabled"
+                if ticket_preparation is False
+                else "Unknown"
+            )
+        )
+
+        st.text(
+            "Evaluated case IDs: "
+            + ", ".join(report["case_ids"])
+        )
+
+
+# ---------------------------------------------------------
+# 26.5 Render accuracy comparison
+# ---------------------------------------------------------
+
+
+def render_accuracy_comparison(
+    metrics: pd.DataFrame,
+) -> None:
+
+    st.subheader("Framework Performance")
+
+    st.caption(
+        "Higher scores indicate better performance "
+        "under the selected evaluation metrics."
+    )
+
+    accuracy = metrics[
+        metrics["Metric Key"] != "latency_seconds"
+    ].copy()
+
+    accuracy["Score (%)"] = (
+        accuracy["Average"] * 100
+    )
+
+    chart_data = accuracy.dropna(
+        subset=["Score (%)"]
+    )
+
+    if chart_data.empty:
+
+        st.info(
+            "No accuracy scores are available."
+        )
+
+    else:
+
+        st.bar_chart(
+            chart_data,
+            x="Metric",
+            y="Score (%)",
+            color="Framework",
+            stack=False,
+        )
+
+    comparison_table = accuracy.pivot(
+        index="Metric",
+        columns="Framework",
+        values="Display Value",
+    )
+
+    comparison_table = comparison_table.reindex(
+        [
+            label
+            for metric, label
+            in EVALUATION_METRIC_LABELS.items()
+            if metric != "latency_seconds"
+        ]
+    )
+
+    st.dataframe(
+        comparison_table,
+        use_container_width=True,
+    )
+
+    st.caption(
+        "N/A indicates that no score was available. "
+        "Missing scores are not treated as zero."
+    )
+
+
+# ---------------------------------------------------------
+# 26.6 Render latency comparison
+# ---------------------------------------------------------
+
+
+def render_latency_comparison(
+    metrics: pd.DataFrame,
+) -> None:
+
+    st.subheader("Execution Latency")
+
+    st.caption(
+        "Lower average execution latency is preferable, "
+        "provided response quality and reliability "
+        "remain acceptable."
+    )
+
+    latency = metrics[
+        metrics["Metric Key"] == "latency_seconds"
+    ].copy()
+
+    columns = st.columns(len(latency))
+
+    for column, (_, row) in zip(
+        columns,
+        latency.iterrows(),
+    ):
+
+        column.metric(
+            row["Framework"],
+            row["Display Value"],
+        )
+
+    latency["Latency (seconds)"] = (
+        latency["Average"]
+    )
+
+    chart_data = latency.dropna(
+        subset=["Latency (seconds)"]
+    )
+
+    if not chart_data.empty:
+
+        st.bar_chart(
+            chart_data,
+            x="Framework",
+            y="Latency (seconds)",
+            color="Framework",
+        )
+
+    st.caption(
+        "Latency includes framework execution and "
+        "initialization, but excludes LLM judge scoring."
+    )
+
+
+# ---------------------------------------------------------
+# 26.7 Render evaluation coverage
+# ---------------------------------------------------------
+
+
+def render_evaluation_coverage(
+    metrics: pd.DataFrame,
+) -> None:
+
+    st.subheader("Evaluation Coverage")
+
+    st.caption(
+        "Coverage shows how many evaluation cases "
+        "contributed to each reported average."
+    )
+
+    coverage = metrics.copy()
+
+    coverage["Coverage (%)"] = (
+        coverage["Coverage"] * 100
+    )
+
+    st.dataframe(
+        coverage[
+            [
+                "Metric",
+                "Framework",
+                "Scored Cases",
+                "Total Cases",
+                "Coverage (%)",
+            ]
+        ],
+        column_config={
+            "Coverage (%)": st.column_config.ProgressColumn(
+                "Coverage",
+                min_value=0,
+                max_value=100,
+                format="%.1f%%",
+            ),
+        },
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    incomplete = coverage[
+        coverage["Scored Cases"]
+        < coverage["Total Cases"]
+    ]
+
+    if not incomplete.empty:
+
+        st.info(
+            "Some metrics have incomplete coverage. "
+            "This may result from non-applicable "
+            "metrics or unavailable judge scores."
+        )
+
+
+# ---------------------------------------------------------
+# 26.8 Render case-level evaluation results
+# ---------------------------------------------------------
+
+
+def render_case_level_results(
+    report: dict,
+) -> None:
+
+    st.subheader("Case-Level Analysis")
+
+    selected_framework = st.selectbox(
+        "Select framework",
+        options=report["frameworks"],
+        format_func=lambda framework: (
+            FRAMEWORK_LABELS[framework]
+        ),
+        key="evaluation_case_framework",
+    )
+
+    framework_report = report[
+        "framework_reports"
+    ][selected_framework]
+
+    results = framework_report.get(
+        "results",
+        [],
+    )
+
+    if not isinstance(results, list) or not results:
+
+        st.info(
+            "No case-level results are available."
         )
 
         return
 
-    st.write(
-        "Compare LangGraph, CrewAI and Agno "
-        "using shared enterprise evaluation metrics."
-    )
+    rows = []
 
-    reports = []
+    for result in results:
 
-    if EVALUATION_DIR.exists():
+        if not isinstance(result, dict):
+            continue
 
-        reports = sorted(
-            EVALUATION_DIR.glob(
-                "comparison_*.json"
+        outputs = result.get("outputs", {})
+
+        inputs = result.get("inputs", {})
+
+        metrics = result.get("metrics", {})
+
+        if not all(
+            isinstance(value, dict)
+            for value in (outputs, inputs, metrics)
+        ):
+            continue
+
+        row = {
+            "Case ID": result.get("case_id", ""),
+
+            "Category": result.get("category", ""),
+
+            "Role": inputs.get("user_role", ""),
+
+            "Success": outputs.get("success"),
+
+            "Execution Failed": outputs.get(
+                "execution_failed"
             ),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
 
-    col1, col2 = st.columns(2)
+            "Error": outputs.get("error") or "-",
+        }
 
-    with col1:
+        for metric, label in (
+            EVALUATION_METRIC_LABELS.items()
+        ):
 
-        st.metric(
-            "Frameworks",
-            len(FRAMEWORK_OPTIONS),
-        )
+            metric_result = metrics.get(
+                metric,
+                {},
+            )
 
-    with col2:
+            score = (
+                metric_result.get("score")
+                if isinstance(metric_result, dict)
+                else None
+            )
 
-        st.metric(
-            "Comparison Reports",
-            len(reports),
-        )
+            if score is None:
 
-    if reports:
+                row[label] = "N/A"
 
-        st.caption(
-            f"Latest report: {reports[0].name}"
+            elif type(score) not in (int, float):
+
+                row[label] = "Invalid"
+
+            elif not math.isfinite(score):
+
+                row[label] = "Invalid"
+
+            elif metric == "latency_seconds":
+
+                row[label] = f"{score:.3f}s"
+
+            else:
+
+                row[label] = f"{score * 100:.2f}%"
+
+        rows.append(row)
+
+    if rows:
+
+        st.dataframe(
+            pd.DataFrame(rows),
+            hide_index=True,
+            use_container_width=True,
         )
 
     else:
 
         st.info(
-            "No comparison reports are available. "
-            "Run the evaluation runner first."
+            "No valid case-level results are available."
         )
 
-    st.info(
-        "Detailed benchmark visualizations "
-        "will be implemented in Module 11.4."
+    st.caption(
+        "A false success value does not necessarily "
+        "indicate an incorrect response. Authorized "
+        "security refusals can satisfy expected behavior."
     )
 
 
+# ---------------------------------------------------------
+# 26.9 Main evaluation dashboard
+# ---------------------------------------------------------
+
+
+def render_evaluation_page(
+    user: UserContext,
+) -> None:
+
+    st.header("Evaluation Dashboard")
+
+    st.caption(
+        "Comparative evaluation of IncidentIQ "
+        "agentic AI frameworks."
+    )
+
+    # Restrict dashboard access before reading reports.
+
+    if user.role != "it_admin":
+
+        st.warning(
+            "Evaluation reports are restricted "
+            "to IT administrators."
+        )
+
+        return
+
+    try:
+
+        report_paths = discover_evaluation_reports()
+
+    except OSError:
+
+        st.error(
+            "Evaluation reports could not be accessed."
+        )
+
+        return
+
+    if not report_paths:
+
+        st.info(
+            "No comparison reports are available."
+        )
+
+        st.markdown(
+            "Generate an evaluation report using "
+            "the following terminal command:"
+        )
+
+        st.code(
+            "uv run python -m incidentiq.evaluation.runner",
+            language="powershell",
+        )
+
+        return
+
+    selected_report = st.selectbox(
+        "Select evaluation experiment",
+        options=report_paths,
+        format_func=lambda path: path.name,
+        key="selected_evaluation_report",
+    )
+
+    try:
+
+        report = load_evaluation_report(
+            selected_report
+        )
+
+    except (OSError, ValueError) as exc:
+
+        logger.error(
+            "Evaluation report loading failed: %s",
+            type(exc).__name__,
+        )
+
+        st.error(
+            "The selected evaluation report is "
+            "invalid or could not be loaded."
+        )
+
+        return
+
+    render_experiment_metadata(report)
+
+    st.divider()
+
+    comparison_mode = st.radio(
+        "Comparison Method",
+        options=[
+            "Common scored cases",
+            "Individual framework averages",
+        ],
+        horizontal=True,
+        key="evaluation_comparison_mode",
+    )
+
+    if comparison_mode == "Common scored cases":
+
+        summary_key = "common_case_summary"
+
+        st.caption(
+            "Each metric is compared using only "
+            "cases with available scores across "
+            "all evaluated frameworks."
+        )
+
+    else:
+
+        summary_key = "summary"
+
+        st.caption(
+            "Each framework uses its own available "
+            "scores. Coverage may differ between "
+            "frameworks."
+        )
+
+    metrics = normalize_evaluation_metrics(
+        report=report,
+        summary_key=summary_key,
+    )
+
+    performance_tab, latency_tab, coverage_tab, cases_tab = (
+        st.tabs([
+            "Performance",
+            "Latency",
+            "Coverage",
+            "Case-Level Results",
+        ])
+    )
+
+    with performance_tab:
+
+        render_accuracy_comparison(metrics)
+
+    with latency_tab:
+
+        render_latency_comparison(metrics)
+
+    with coverage_tab:
+
+        render_evaluation_coverage(metrics)
+
+    with cases_tab:
+
+        render_case_level_results(report)
+
+    st.divider()
+
+    st.caption(
+        "Evaluation results are based on synthetic "
+        "enterprise data and the selected experiment. "
+        "They do not constitute production security "
+        "or reliability certification."
+    )
+    
 # =========================================================
 # 27. ABOUT PAGE
 # =========================================================
