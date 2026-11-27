@@ -2311,13 +2311,40 @@ def render_ticket_page(
 
 EVALUATION_METRIC_LABELS = {
     "mcp_tool_accuracy": "MCP Tool Accuracy",
-    "citation_accuracy": "Citation Accuracy",
+    "citation_accuracy": "Citation Exact Match",
+    "citation_precision": "Citation Precision",
+    "citation_recall": "Citation Recall",
+    "citation_f1": "Citation F1",
     "restricted_text_check": "Restricted Text Check",
     "behavior_compliance": "Behavior Compliance",
     "answer_relevance": "Answer Relevance",
     "execution_reliability": "Execution Reliability",
     "latency_seconds": "Average Latency",
 }
+
+
+CITATION_METRICS = (
+    "citation_accuracy",
+    "citation_precision",
+    "citation_recall",
+    "citation_f1",
+)
+
+
+EXTENDED_CITATION_METRICS = (
+    "citation_precision",
+    "citation_recall",
+    "citation_f1",
+)
+
+
+PERFORMANCE_METRICS = (
+    "mcp_tool_accuracy",
+    "restricted_text_check",
+    "behavior_compliance",
+    "answer_relevance",
+    "execution_reliability",
+)
 
 
 # ---------------------------------------------------------
@@ -2346,6 +2373,73 @@ def discover_evaluation_reports() -> list[Path]:
 # ---------------------------------------------------------
 # 26.2 Load and validate comparison report
 # ---------------------------------------------------------
+
+def normalize_legacy_report_metrics(
+    report: dict,
+) -> dict:
+
+    frameworks = report["frameworks"]
+
+    total_cases = report["cases_per_framework"]
+
+    summary_keys = (
+        "summary",
+        "common_case_summary",
+    )
+
+    for summary_key in summary_keys:
+
+        if not isinstance(report[summary_key], dict):
+
+            raise ValueError(
+                "Invalid evaluation summary."
+            )
+
+    presence = [
+        metric in report[summary_key]
+
+        for summary_key in summary_keys
+
+        for metric in EXTENDED_CITATION_METRICS
+    ]
+
+    # All extended metrics exist:
+    # this is an enhanced evaluation report.
+
+    if all(presence):
+
+        return report
+
+    # Only some extended metrics exist:
+    # reject an inconsistent report.
+
+    if any(presence):
+
+        raise ValueError(
+            "Incomplete extended citation metrics."
+        )
+
+    # None of the extended metrics exist:
+    # treat this as a legacy report.
+
+    for summary_key in summary_keys:
+
+        summary = report[summary_key]
+
+        for metric in EXTENDED_CITATION_METRICS:
+
+            summary[metric] = {
+
+                framework: {
+                    "average": None,
+                    "scored_cases": 0,
+                    "total_cases": total_cases,
+                }
+
+                for framework in frameworks
+            }
+
+    return report
 
 
 def load_evaluation_report(
@@ -2478,7 +2572,9 @@ def load_evaluation_report(
             raise ValueError(
                 "Framework case IDs do not match."
             )
-
+    report = normalize_legacy_report_metrics(
+        report
+    )
     # Validate both comparison modes.
 
     for summary_key in (
@@ -2739,55 +2835,66 @@ def render_accuracy_comparison(
     st.subheader("Framework Performance")
 
     st.caption(
-        "Higher scores indicate better performance "
-        "under the selected evaluation metrics."
+        "Compare operational correctness, expected "
+        "behavior, answer relevance and execution "
+        "reliability."
     )
 
-    accuracy = metrics[
-        metrics["Metric Key"] != "latency_seconds"
+    performance = metrics[
+        metrics["Metric Key"].isin(
+            PERFORMANCE_METRICS
+        )
     ].copy()
 
-    accuracy["Score (%)"] = (
-        accuracy["Average"] * 100
+    performance["Score (%)"] = (
+        pd.to_numeric(
+            performance["Average"],
+            errors="coerce",
+        ) * 100
     )
 
-    chart_data = accuracy.dropna(
+    chart_data = performance.dropna(
         subset=["Score (%)"]
     )
 
     if chart_data.empty:
 
         st.info(
-            "No accuracy scores are available."
+            "No performance scores are available."
         )
 
     else:
 
         st.bar_chart(
             chart_data,
+
             x="Metric",
+
             y="Score (%)",
+
             color="Framework",
+
             stack=False,
         )
 
-    comparison_table = accuracy.pivot(
+    comparison_table = performance.pivot(
+
         index="Metric",
+
         columns="Framework",
+
         values="Display Value",
     )
 
-    comparison_table = comparison_table.reindex(
-        [
-            label
-            for metric, label
-            in EVALUATION_METRIC_LABELS.items()
-            if metric != "latency_seconds"
-        ]
-    )
+    comparison_table = comparison_table.reindex([
+        EVALUATION_METRIC_LABELS[metric]
+
+        for metric in PERFORMANCE_METRICS
+    ])
 
     st.dataframe(
         comparison_table,
+
         use_container_width=True,
     )
 
@@ -2796,7 +2903,244 @@ def render_accuracy_comparison(
         "Missing scores are not treated as zero."
     )
 
+    with st.expander(
+        "Understanding performance metrics"
+    ):
 
+        st.markdown(
+            """
+            **MCP Tool Accuracy**
+
+            Exact match between expected and reported MCP tools.
+
+            **Restricted Text Check**
+
+            Checks whether specified prohibited text appears
+            in the generated response.
+
+            **Behavior Compliance**
+
+            Measures whether the response satisfies the
+            expected behavior according to the evaluation judge.
+
+            **Answer Relevance**
+
+            Measures whether the response addresses the
+            user's actual question.
+
+            **Execution Reliability**
+
+            Measures whether the framework completed execution
+            without a classified technical failure.
+                        """
+        )
+
+    st.info(
+        "High execution reliability does not necessarily "
+        "indicate a correct, grounded or secure answer."
+    )
+
+# ---------------------------------------------------------
+# 26.5A Render citation quality comparison
+# ---------------------------------------------------------
+
+
+def render_citation_comparison(
+    metrics: pd.DataFrame,
+) -> None:
+
+    st.subheader("Citation Quality Analysis")
+
+    st.caption(
+        "Compare citation completeness and selectivity "
+        "against the evaluation reference documents."
+    )
+
+    citations = metrics[
+        metrics["Metric Key"].isin(
+            CITATION_METRICS
+        )
+    ].copy()
+
+    citations["Score (%)"] = (
+        pd.to_numeric(
+            citations["Average"],
+            errors="coerce",
+        ) * 100
+    )
+
+    # -----------------------------------------------------
+    # Stage 1: Citation F1 summary
+    # -----------------------------------------------------
+
+    f1_scores = citations[
+        citations["Metric Key"] == "citation_f1"
+    ]
+
+    if not f1_scores.empty:
+
+        columns = st.columns(
+            len(f1_scores)
+        )
+
+        for column, (_, row) in zip(
+            columns,
+            f1_scores.iterrows(),
+        ):
+
+            column.metric(
+                label=f"{row['Framework']} F1",
+
+                value=row["Display Value"],
+            )
+
+            column.caption(
+                f"Scored cases: "
+                f"{row['Scored Cases']}/"
+                f"{row['Total Cases']}"
+            )
+
+    # -----------------------------------------------------
+    # Stage 2: Grouped citation comparison
+    # -----------------------------------------------------
+
+    chart_data = citations.dropna(
+        subset=["Score (%)"]
+    )
+
+    if chart_data.empty:
+
+        st.info(
+            "No citation scores are available."
+        )
+
+    else:
+
+        st.bar_chart(
+            chart_data,
+
+            x="Metric",
+
+            y="Score (%)",
+
+            color="Framework",
+
+            stack=False,
+        )
+
+    # -----------------------------------------------------
+    # Stage 3: Detailed citation table
+    # -----------------------------------------------------
+
+    citation_table = citations.pivot(
+
+        index="Metric",
+
+        columns="Framework",
+
+        values="Display Value",
+    )
+
+    citation_table = citation_table.reindex([
+        EVALUATION_METRIC_LABELS[metric]
+
+        for metric in CITATION_METRICS
+    ])
+
+    st.dataframe(
+        citation_table,
+
+        use_container_width=True,
+    )
+
+    # -----------------------------------------------------
+    # Stage 4: Historical report compatibility
+    # -----------------------------------------------------
+
+    extended_metrics = citations[
+        citations["Metric Key"].isin(
+            EXTENDED_CITATION_METRICS
+        )
+    ]
+
+    if extended_metrics["Average"].isna().all():
+
+        st.info(
+            "Extended citation scores are unavailable "
+            "for the selected report or comparison mode. "
+            "Older reports may not contain these metrics."
+        )
+
+    # -----------------------------------------------------
+    # Stage 5: Explain citation metrics
+    # -----------------------------------------------------
+
+    with st.expander(
+        "Understanding citation metrics"
+    ):
+
+        st.markdown(
+            """
+**Citation Exact Match**
+
+Checks whether the returned document ID set
+exactly matches the expected document ID set.
+
+**Citation Precision**
+
+Measures the proportion of returned citations
+that match expected documents.
+            """
+        )
+
+        st.latex(
+            r"Precision = \frac{TP}{TP + FP}"
+        )
+
+        st.markdown(
+            """
+**Citation Recall**
+
+Measures the proportion of expected documents
+that were successfully cited.
+            """
+        )
+
+        st.latex(
+            r"Recall = \frac{TP}{TP + FN}"
+        )
+
+        st.markdown(
+            """
+**Citation F1**
+
+Balances citation precision and recall.
+            """
+        )
+
+        st.latex(
+            r"F_1 = \frac{2PR}{P + R}"
+        )
+
+        st.caption(
+            "TP = matched citations, "
+            "FP = unexpected citations, "
+            "FN = missing expected citations."
+        )
+
+        st.caption(
+            "Reported averages aggregate per-case "
+            "scores. Average F1 is not necessarily "
+            "the harmonic mean of average precision "
+            "and average recall."
+        )
+
+    st.warning(
+        "Citation metrics measure agreement with "
+        "reference document IDs. They do not independently "
+        "verify whether each citation supports the "
+        "generated claims."
+    )
 # ---------------------------------------------------------
 # 26.6 Render latency comparison
 # ---------------------------------------------------------
@@ -2948,6 +3292,10 @@ def render_case_level_results(
 
         return
 
+    # -----------------------------------------------------
+    # Stage 1: Collect all evaluation rows
+    # -----------------------------------------------------
+
     rows = []
 
     for result in results:
@@ -2956,9 +3304,7 @@ def render_case_level_results(
             continue
 
         outputs = result.get("outputs", {})
-
         inputs = result.get("inputs", {})
-
         metrics = result.get("metrics", {})
 
         if not all(
@@ -3020,26 +3366,112 @@ def render_case_level_results(
 
         rows.append(row)
 
-    if rows:
+    # -----------------------------------------------------
+    # Stage 2: Validate collected rows
+    # Outside the result-processing loop
+    # -----------------------------------------------------
 
-        st.dataframe(
-            pd.DataFrame(rows),
-            hide_index=True,
-            use_container_width=True,
-        )
-
-    else:
+    if not rows:
 
         st.info(
             "No valid case-level results are available."
         )
+
+        return
+
+    case_table = pd.DataFrame(rows)
+
+    # -----------------------------------------------------
+    # Stage 3: Create the filter widget only once
+    # -----------------------------------------------------
+
+    filter_mode = st.selectbox(
+        "Filter evaluation cases",
+
+        options=[
+            "All cases",
+            "Citation mismatches",
+            "Behavior compliance failures",
+            "Answer relevance failures",
+            "Technical execution failures",
+        ],
+
+        key="evaluation_case_filter",
+    )
+
+    # -----------------------------------------------------
+    # Stage 4: Apply selected filter
+    # -----------------------------------------------------
+
+    filtered = case_table.copy()
+
+    if filter_mode == "Citation mismatches":
+
+        filtered = filtered[
+            filtered["Citation Exact Match"]
+            == "0.00%"
+        ]
+
+    elif filter_mode == "Behavior compliance failures":
+
+        filtered = filtered[
+            filtered["Behavior Compliance"]
+            == "0.00%"
+        ]
+
+    elif filter_mode == "Answer relevance failures":
+
+        filtered = filtered[
+            filtered["Answer Relevance"]
+            == "0.00%"
+        ]
+
+    elif filter_mode == "Technical execution failures":
+
+        filtered = filtered[
+            filtered["Execution Failed"] == True
+        ]
+
+    # -----------------------------------------------------
+    # Stage 5: Render filtered evaluation results
+    # -----------------------------------------------------
+
+    st.caption(
+        f"Showing {len(filtered)} "
+        f"of {len(case_table)} cases."
+    )
+
+    if filtered.empty:
+
+        st.info(
+            "No cases match the selected filter."
+        )
+
+    else:
+
+        st.dataframe(
+            filtered,
+
+            hide_index=True,
+
+            use_container_width=True,
+        )
+
+    # -----------------------------------------------------
+    # Stage 6: Explain case-level interpretation
+    # -----------------------------------------------------
+
+    st.caption(
+        "Case-level results show individual framework "
+        "scores for all evaluated cases, regardless of "
+        "the selected aggregate comparison method."
+    )
 
     st.caption(
         "A false success value does not necessarily "
         "indicate an incorrect response. Authorized "
         "security refusals can satisfy expected behavior."
     )
-
 
 # ---------------------------------------------------------
 # 26.9 Main evaluation dashboard
@@ -3164,18 +3596,27 @@ def render_evaluation_page(
         summary_key=summary_key,
     )
 
-    performance_tab, latency_tab, coverage_tab, cases_tab = (
-        st.tabs([
-            "Performance",
-            "Latency",
-            "Coverage",
-            "Case-Level Results",
-        ])
-    )
+    (
+        performance_tab,
+        citation_tab,
+        latency_tab,
+        coverage_tab,
+        cases_tab,
+    ) = st.tabs([
+        "Performance",
+        "Citation Quality",
+        "Latency",
+        "Coverage",
+        "Case-Level Results",
+    ])
 
     with performance_tab:
 
         render_accuracy_comparison(metrics)
+
+    with citation_tab:
+
+        render_citation_comparison(metrics)
 
     with latency_tab:
 
