@@ -36,7 +36,17 @@ import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+from pathlib import Path
 
+from incidentiq.core.security import (
+    ROLE_PERMISSIONS,
+)
+
+from pathlib import Path
+
+from incidentiq.core.security import (
+    ROLE_PERMISSIONS,
+)
 
 # Register the MCP server.
 mcp = FastMCP("IncidentIQ")
@@ -174,6 +184,67 @@ def get_incident_tool(incident_id: str) -> dict:
         "incident": incident,
     }
 
+# =========================================================
+# OPERATIONAL INCIDENT SEARCH NORMALIZATION
+# =========================================================
+
+INCIDENT_SEARCH_ALIASES = {
+    "problems": "failure",
+    "problem": "failure",
+    "errors": "failure",
+    "error": "failure",
+    "failures": "failure",
+    "failed": "failure",
+    "fails": "failure",
+    "outages": "outage",
+    "dashboards": "dashboard",
+    "connections": "connection",
+    "disconnections": "disconnection",
+    "folders": "folder",
+    "shared": "sharing",
+    "files": "file",
+    "unavailable": "outage",
+}
+
+INCIDENT_SEARCH_STOP_WORDS = frozenset({
+    "a",
+    "an",
+    "the",
+    "for",
+    "of",
+    "to",
+    "with",
+    "about",
+    "related",
+    "historical",
+    "incident",
+    "incidents",
+    "corporate",
+})
+
+
+def normalize_incident_search(
+    text: str,
+) -> set[str]:
+    """
+    Convert incident search text into normalized tokens.
+
+    This is deterministic lexical normalization,
+    not semantic vector retrieval.
+    """
+
+    tokens = re.findall(
+        r"[a-z0-9]+",
+        text.casefold(),
+    )
+
+    normalized = {
+        INCIDENT_SEARCH_ALIASES.get(token, token)
+        for token in tokens
+        if token not in INCIDENT_SEARCH_STOP_WORDS
+    }
+
+    return normalized
 
 @mcp.tool(name="search_incidents")
 def search_incidents_tool(
@@ -181,45 +252,110 @@ def search_incidents_tool(
     limit: int = 5,
 ) -> dict:
     """
-    MCP tool: Search authorized historical incidents.
+    Search authorized historical incidents using
+    normalized lexical matching.
 
-    This initial implementation performs keyword matching
-    against incident titles, symptoms, and service IDs.
+    Authorization is enforced before matching
+    or ranking incident records.
     """
 
     user = get_authenticated_user()
 
     if not query.strip():
-        raise ValueError("Search query cannot be empty.")
+        raise ValueError(
+            "Search query cannot be empty."
+        )
+
+    if len(query) > 500:
+        raise ValueError(
+            "Search query is too long."
+        )
 
     if not 1 <= limit <= 20:
-        raise ValueError("limit must be between 1 and 20.")
+        raise ValueError(
+            "limit must be between 1 and 20."
+        )
 
-    terms = query.lower().split()
-    matches = []
+    query_terms = normalize_incident_search(
+        query
+    )
 
-    for incident in load_jsonl_records("incidents.jsonl"):
+    if not query_terms:
+        return {
+            "count": 0,
+            "incidents": [],
+        }
+
+    ranked_matches = []
+
+    for incident in load_jsonl_records(
+        "incidents.jsonl"
+    ):
+
+        # Authorization must happen first.
+
         try:
             require_access(
                 user,
                 incident["classification"],
             )
+
         except AccessDeniedError:
             continue
 
-        searchable_text = " ".join(
-            [
-                incident.get("title", ""),
-                incident.get("service_id", ""),
-                " ".join(incident.get("symptoms", [])),
-            ]
-        ).lower()
+        searchable_text = " ".join([
+            incident.get("title", ""),
+            incident.get("service_id", ""),
+            " ".join(
+                incident.get("symptoms", [])
+            ),
+        ])
 
-        if all(term in searchable_text for term in terms):
-            matches.append(incident)
+        record_terms = normalize_incident_search(
+            searchable_text
+        )
 
-        if len(matches) >= limit:
-            break
+        matched_terms = (
+            query_terms & record_terms
+        )
+
+        # Require all normalized search terms.
+        # Do not return weak partial matches.
+
+        if not query_terms.issubset(
+            record_terms
+        ):
+            continue
+
+        title_terms = normalize_incident_search(
+            incident.get("title", "")
+        )
+
+        title_matches = len(
+            query_terms & title_terms
+        )
+
+        ranked_matches.append((
+            title_matches,
+            len(matched_terms),
+            incident,
+        ))
+
+    # Prefer records whose titles directly
+    # match more of the requested search terms.
+
+    ranked_matches.sort(
+        key=lambda item: (
+            -item[0],
+            -item[1],
+            item[2]["incident_id"],
+        )
+    )
+
+    matches = [
+        item[2]
+        for item in ranked_matches[:limit]
+    ]
 
     return {
         "count": len(matches),
@@ -318,6 +454,22 @@ def require_it_staff(user: UserContext) -> None:
             "You do not have permission to access this operation."
         )
 
+def access_denied_result() -> dict:
+    """
+    Return a safe authorization denial.
+
+    Do not disclose resource existence,
+    classifications or internal records.
+    """
+
+    return {
+        "success": False,
+        "error": "ACCESS_DENIED",
+        "message": (
+            "You do not have permission "
+            "to access this operation."
+        ),
+    }
 
 def ticket_summary(ticket: dict) -> dict:
     """
@@ -357,7 +509,12 @@ def search_tickets_tool(
     Only IT Support and IT Admin may search all tickets.
     """
     user = get_authenticated_user()
-    require_it_staff(user)
+
+    try:
+        require_it_staff(user)
+
+    except AccessDeniedError:
+        return access_denied_result()
 
     if not query.strip():
         raise ValueError("Search query cannot be empty.")
@@ -408,7 +565,12 @@ def get_ticket_tool(ticket_id: str) -> dict:
     Uses the same RBAC policy as ticket search.
     """
     user = get_authenticated_user()
-    require_it_staff(user)
+
+    try:
+        require_it_staff(user)
+
+    except AccessDeniedError:
+        return access_denied_result()
 
     if not re.fullmatch(r"TKT-(?:\d{4}|[A-F0-9]{12})",ticket_id,):
         raise ValueError("Invalid ticket ID format.")
@@ -417,10 +579,22 @@ def get_ticket_tool(ticket_id: str) -> dict:
         if ticket.get("ticket_id") != ticket_id:
             continue
 
-        require_access(
-            user,
-            ticket.get("classification", "it_internal"),
-        )
+        try:
+                require_access(
+                    user,
+                    ticket.get(
+                        "classification",
+                        "it_internal",
+                    ),
+                )
+
+        except AccessDeniedError:
+                return {
+                    "found": False,
+                    "message": (
+                        "Ticket not found or access denied."
+                    ),
+                }
 
         return {
             "found": True,
@@ -428,9 +602,11 @@ def get_ticket_tool(ticket_id: str) -> dict:
         }
 
     return {
-        "found": False,
-        "message": "Ticket not found.",
-    }
+    "found": False,
+    "message": (
+        "Ticket not found or access denied."
+    ),
+}
 
 
 def load_asset_records() -> list[dict]:
@@ -488,7 +664,12 @@ def search_assets_tool(
     Access is checked for each asset before returning it.
     """
     user = get_authenticated_user()
-    require_it_staff(user)
+
+    try:
+        require_it_staff(user)
+
+    except AccessDeniedError:
+        return access_denied_result()
 
     if not query.strip():
         raise ValueError("Search query cannot be empty.")

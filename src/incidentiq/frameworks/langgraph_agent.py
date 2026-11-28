@@ -44,6 +44,7 @@ from incidentiq.core.routing import (
     OPERATIONAL_ROUTES,
     STAFF_ONLY_ROUTES,
     RequestRoute,
+    resolve_service_identifier,
 )
 
 from incidentiq.rag.retriever import (
@@ -1103,20 +1104,18 @@ def run_operational_workflow(
 
     if route == "get_service_status":
 
-        service_id = extract_single_identifier(
+        service_id = resolve_service_identifier(
             query=request.query,
-
-            pattern=SERVICE_ID_PATTERN,
         )
 
         if not service_id:
 
-            return error_response(
+                        return error_response(
                 answer=(
-                    "Please provide exactly "
-                    "one service ID."
+                    "Please specify exactly one "
+                    "supported service using its "
+                    "name or service ID."
                 ),
-
                 error="SERVICE_ID_REQUIRED",
             )
 

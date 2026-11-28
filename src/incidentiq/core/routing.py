@@ -60,6 +60,87 @@ TICKET_ID_PATTERN = (
 
 
 # =========================================================
+# 2A. SERVICE NAME ALIASES
+# =========================================================
+
+
+SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
+
+    "SVC-VPN": (
+        "vpn",
+        "corporate vpn",
+        "virtual private network",
+    ),
+
+    "SVC-IDENTITY": (
+        "identity",
+        "identity and sso",
+        "identity sso",
+        "sso",
+        "single sign on",
+        "mfa",
+    ),
+
+    "SVC-EMAIL": (
+        "email",
+        "corporate email",
+        "email service",
+        "mail service",
+    ),
+
+    "SVC-PAYROLL": (
+        "payroll",
+        "payroll application",
+        "payroll portal",
+        "payroll service",
+    ),
+
+    "SVC-HR": (
+        "hr",
+        "hr portal",
+        "human resources portal",
+    ),
+
+    "SVC-ENDPOINT": (
+        "endpoint",
+        "endpoint service",
+        "employee devices",
+        "managed devices",
+    ),
+
+    "SVC-WIFI": (
+        "wifi",
+        "wi fi",
+        "office wifi",
+        "office wi fi",
+        "wireless network",
+    ),
+
+    "SVC-FILES": (
+        "file sharing",
+        "file storage",
+        "shared folders",
+        "shared folder",
+        "file sharing service",
+    ),
+
+    "SVC-DEVOPS": (
+        "devops",
+        "ci cd",
+        "ci cd platform",
+        "deployment pipeline",
+        "build pipeline",
+    ),
+
+    "SVC-MONITOR": (
+        "monitoring",
+        "monitoring platform",
+        "monitoring dashboard",
+        "monitoring service",
+    ),
+}
+
+# =========================================================
 # 3. SHARED REQUEST CLASSIFICATION
 # =========================================================
 
@@ -137,38 +218,79 @@ def classify_request(
 
         return "incident"
 
+        # -----------------------------------------------------
+    # Incident search and historical investigation
     # -----------------------------------------------------
-    # Incident search
-    # -----------------------------------------------------
 
-    if re.search(
+    explicit_incident_search = bool(
+        re.search(
+            r"\b(search|find|list|show|compare)\b"
+            r".*\bincidents?\b",
+            text,
+        )
+    )
 
-        r"\b(search|find|list|show)\b"
-        r".*\bincidents?\b",
+    historical_investigation = (
+        bool(
+            re.match(
+                r"^(?:please\s+)?"
+                r"(?:investigate|analyze|find|search|"
+                r"compare|review|list|show)\b",
+                text,
+            )
+        )
+        and bool(
+            re.search(
+                r"\b(previous|historical|past|recurring)\b",
+                text,
+            )
+        )
+        and bool(
+            re.search(
+                r"\b(incidents?|failures?|problems?|"
+                r"outages?|errors?|issues?)\b",
+                text,
+            )
+        )
+    )
 
-        text,
+    if (
+        explicit_incident_search
+        or historical_investigation
     ):
-
         return "search_incidents"
 
-    # -----------------------------------------------------
+        # -----------------------------------------------------
     # Service health
     # -----------------------------------------------------
 
-    if (
+    service_status_intent = bool(
         re.search(
-            SERVICE_ID_PATTERN,
-            query.upper(),
-        )
-
-        and re.search(
-
-            r"\b(status|health|available|availability)\b",
-
+            r"\b(status|health|available|"
+            r"availability|operational|"
+            r"down|working|online|offline)\b",
             text,
         )
-    ):
+    )
 
+    service_references = (
+        find_service_identifiers(query)
+    )
+
+    instructional_request = bool(
+        re.match(
+            r"^(?:please\s+)?"
+            r"(?:how|why|explain|define|"
+            r"what does|what is meant by)\b",
+            text,
+        )
+    )
+
+    if (
+        service_status_intent
+        and service_references
+        and not instructional_request
+    ):
         return "get_service_status"
 
     # -----------------------------------------------------
@@ -217,6 +339,111 @@ def extract_single_identifier(
         iter(identifiers)
     )
 
+# =========================================================
+# 4A. NATURAL-LANGUAGE SERVICE RESOLUTION
+# =========================================================
+
+
+def normalize_service_text(
+    text: str,
+) -> str:
+    """
+    Normalize service names for alias matching.
+    """
+
+    text = text.casefold()
+
+    text = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        text,
+    )
+
+    return " ".join(text.split())
+
+
+def find_service_identifiers(
+    query: str,
+) -> set[str]:
+    """
+    Identify explicitly mentioned service IDs
+    and natural-language service aliases.
+    """
+
+    explicit_ids = set(
+        re.findall(
+            SERVICE_ID_PATTERN,
+            query.upper(),
+        )
+    )
+
+    # Remove explicit identifiers before alias
+    # matching to avoid accidental token matches.
+
+    remaining_text = re.sub(
+        SERVICE_ID_PATTERN,
+        " ",
+        query,
+        flags=re.IGNORECASE,
+    )
+
+    normalized_query = (
+        normalize_service_text(
+            remaining_text
+        )
+    )
+
+    matched_ids = set(explicit_ids)
+
+    for service_id, aliases in (
+        SERVICE_ALIASES.items()
+    ):
+
+        for alias in aliases:
+
+            normalized_alias = (
+                normalize_service_text(alias)
+            )
+
+            pattern = (
+                rf"\b"
+                rf"{re.escape(normalized_alias)}"
+                rf"\b"
+            )
+
+            if re.search(
+                pattern,
+                normalized_query,
+            ):
+
+                matched_ids.add(service_id)
+                break
+
+    return matched_ids
+
+
+def resolve_service_identifier(
+    query: str,
+) -> str | None:
+    """
+    Resolve exactly one known service identifier.
+
+    Return None for unknown or ambiguous services.
+    """
+
+    identifiers = find_service_identifiers(
+        query
+    )
+
+    if len(identifiers) != 1:
+        return None
+
+    service_id = next(iter(identifiers))
+
+    if service_id not in SERVICE_ALIASES:
+        return None
+
+    return service_id
 
 # =========================================================
 # 5. OPERATIONAL SEARCH TERM EXTRACTION
@@ -229,6 +456,34 @@ def extract_search_terms(
 ) -> str:
 
     text = query.strip()
+
+        # Normalize historical incident search requests.
+    if route == "search_incidents":
+
+        text = re.sub(
+            r"^(?:please\s+)?"
+            r"(?:investigate|analyze|compare|review)\s+",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        text = re.sub(
+            r"\b(previous|historical|past|recurring)\b",
+            " ",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        text = re.sub(
+            r"\b(affecting|corporate)\b",
+            " ",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        text = text.replace("-", " ")
+        text = " ".join(text.split())
 
     text = re.sub(
 

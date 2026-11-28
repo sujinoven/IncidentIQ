@@ -26,69 +26,101 @@ async def _call_tool_async(
     user: UserContext,
 ) -> dict:
     """
-    Connect to the MCP server and call one tool.
-
-    A new isolated server subprocess is created for
-    each call in this initial implementation.
+    Connect to the local MCP server and execute
+    one tool using trusted application context.
     """
 
-    # Copy the application's environment, including
-    # the configured OpenAI-related settings.
     environment = os.environ.copy()
 
-    # Set the authenticated demo user for this subprocess.
-    environment["INCIDENTIQ_USER_ID"] = user.user_id
-    environment["INCIDENTIQ_USER_ROLE"] = user.role
+    environment["INCIDENTIQ_USER_ID"] = (
+        user.user_id
+    )
 
-    # Launch the server using the same Python interpreter
-    # managed by uv.
-    #A process is a running instance of a program.A subprocess is a separate process launched by another program.
+    environment["INCIDENTIQ_USER_ROLE"] = (
+        user.role
+    )
+
     server_parameters = StdioServerParameters(
-        command=sys.executable,  #It identifies the Python interpreter running the client.
-        args=["-m", "incidentiq.mcp.server"], #The -m option tells Python to execute a module by its importable module name.
+        command=sys.executable,
+        args=[
+            "-m",
+            "incidentiq.mcp.server",
+        ],
         env=environment,
     )
-    #This starts the server subprocess and establishes the input/output streams.
-    async with stdio_client(server_parameters) as (
-        read,
-        write,
-    ):
-        async with ClientSession(read, write) as session: #ClientSessionA session manages the MCP protocol interaction.It allows the client to initialize communication and invoke tools.
-            await session.initialize() #This performs the MCP initialization handshake.During initialization, the client and server establish protocol compatibility and exchange capability information.After initialization, the client can call registered tools.
 
-            # Call the MCP tool by its registered name.
+    # Complete the MCP session before interpreting
+    # the returned tool result.
+
+    async with stdio_client(
+        server_parameters
+    ) as (read, write):
+
+        async with ClientSession(
+            read,
+            write,
+        ) as session:
+
+            await session.initialize()
+
             result = await session.call_tool(
                 tool_name,
                 arguments,
             )
 
-            if result.isError:
-                raise RuntimeError(
-                    f"MCP tool failed: {tool_name}"
+    # Handle tool-level errors outside the
+    # asynchronous context managers.
+
+    if result.isError:
+        raise RuntimeError(
+            f"MCP tool failed: {tool_name}"
+        )
+
+    if result.structuredContent is not None:
+
+        content = result.structuredContent
+
+        if (
+            isinstance(content, dict)
+            and set(content) == {"result"}
+            and isinstance(
+                content["result"],
+                dict,
+            )
+        ):
+            content = content["result"]
+
+    else:
+
+        content = None
+
+        for block in result.content:
+
+            if block.type == "text":
+
+                content = json.loads(
+                    block.text
                 )
 
-            # MCP tools can return structured content.
-            if result.structuredContent is not None:
-                content = result.structuredContent
+                break
 
-                # Some SDK versions wrap structured output.
-                if (
-                    isinstance(content, dict)
-                    and set(content) == {"result"}
-                    and isinstance(content["result"], dict)
-                ):
-                    return content["result"]
+    if not isinstance(content, dict):
 
-                return content
+        raise RuntimeError(
+            f"Invalid MCP result: {tool_name}"
+        )
 
-            # Fall back to JSON text content.
-            for block in result.content:
-                if block.type == "text":
-                    return json.loads(block.text)
+    if (
+        content.get("success") is False
+        and content.get("error")
+        == "ACCESS_DENIED"
+    ):
 
-            raise RuntimeError(
-                f"No usable MCP result from {tool_name}"
-            )
+        raise PermissionError(
+            "Access to this operation is denied."
+        )
+
+    return content
 
 
 def call_tool(

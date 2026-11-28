@@ -40,6 +40,7 @@ from incidentiq.core.security import (
 
 from incidentiq.core.routing import (
     classify_request as classify_shared_request,
+    resolve_service_identifier,
 )
 
 
@@ -1363,6 +1364,86 @@ def run_operational_agent(
             "Expected framework='agno'."
         )
 
+        # -----------------------------------------------------
+    # Deterministic service-status execution
+    # -----------------------------------------------------
+
+    if tool_name == "get_service_status":
+
+        service_id = resolve_service_identifier(
+            request.query
+        )
+
+        if service_id is None:
+
+            return error_response(
+                answer=(
+                    "Please specify exactly one "
+                    "supported service using its "
+                    "name or service ID."
+                ),
+                error="SERVICE_ID_REQUIRED",
+            )
+
+        try:
+
+            result = call_agent_tool(
+                tool_name="get_service_status",
+                arguments={
+                    "service_id": service_id,
+                },
+                user=request.user,
+            )
+
+        except PermissionError:
+
+            return error_response(
+                answer=(
+                    "You do not have permission "
+                    "to access this resource."
+                ),
+                error="ACCESS_DENIED",
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Service status lookup failed."
+            )
+
+            return error_response(
+                answer=(
+                    "The operational request "
+                    "could not be verified."
+                ),
+                error="OPERATIONAL_LOOKUP_FAILED",
+            )
+
+        if result.get("found") is not True:
+
+            return AgentResponse(
+                answer=(
+                    "The requested information "
+                    "is unavailable or access "
+                    "is restricted."
+                ),
+                framework="agno",
+                success=False,
+                error="OPERATIONAL_DATA_UNAVAILABLE",
+                tools_used=["get_service_status"],
+            )
+
+        return AgentResponse(
+            answer=json.dumps(
+                result,
+                indent=2,
+                ensure_ascii=False,
+            ),
+            framework="agno",
+            success=True,
+            tools_used=["get_service_status"],
+        )
+    
     if (
         tool_name in STAFF_ONLY_TOOLS
 

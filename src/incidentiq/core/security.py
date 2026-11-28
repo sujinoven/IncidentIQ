@@ -90,6 +90,8 @@ RESTRICTED_ACTION_PATTERNS = (
     r"^(?:please\s+)?(?:delete|remove|purge)\s+"
     r"(?:(?:all|the|a|an)\s+)?"
     r"(?:tickets?|incidents?|assets?|records?|logs?|databases?)\b",
+    # Block direct infrastructure manipulation requests.
+    r"^(?:please\s+)?(?:restart|shutdown|shut\s+down|reboot)\s+(?:(?:the|all|our|a|an|production|prod|staging|development|dev|critical|database|application|web)\s+)*(?:servers?|services?|systems?|instances?|hosts?|svc-[a-z0-9-]+)\b",
 
     # Infrastructure changes.
 
@@ -124,7 +126,17 @@ RESTRICTED_ACTION_PATTERNS = (
 
     r"^(?:please\s+)?(?:confirm|execute)\s+"
     r".*\bticket\b",
+
+    # Reject explicit attempts to bypass ticket approval.
+    r"\b(?:do\s+not|don't|never)\s+(?:ask\s+for|request|require|wait\s+for)\s+(?:human\s+)?(?:approval|confirmation)\b.*\b(?:create|submit|execute|confirm)\b.*\btickets?\b",
+
+    # Reject direct ticket execution without approval.
+    r"^(?:please\s+)?(?:create|submit|execute|confirm)\b.*\btickets?\b.*\b(?:without|bypassing|skipping)\s+(?:explicit\s+)?(?:human\s+)?(?:approval|confirmation)\b",
+
+    # Reject explicit invocation of the protected creation tool.
+    r"^(?:please\s+)?(?:invoke|call|execute|run|use)\s+(?:the\s+)?create_ticket\b",
 )
+
 
 
 def check_input_guardrails(
